@@ -58,10 +58,22 @@ BUILTIN_ENGINES = [
         "size_hint": "约 500MB",
         "paper": "arXiv:1906.04043",
         "venue": "MIT · NeurIPS 2019",
-        "desc": "统计派方法：语言模型算困惑度，越低越像机器写的。英文文档表现更稳，中文可作参考。",
-        "desc_en": "Statistical method: a language model scores perplexity; lower perplexity means more machine-like. Stronger on English.",
-        "tags": ["轻量", "英文更佳"],
-        "params": {"ppl_high": 25.0, "ppl_low": 12.0},
+        "desc": "统计派方法：语言模型算困惑度，越低越像机器写的。英文实测准确率约 94%，中文约 75%。",
+        "desc_en": "Statistical method: a language model scores perplexity; lower perplexity means more machine-like. Measured accuracy ~94% (English) / ~75% (Chinese).",
+        "tags": ["轻量", "英文更佳", "双语"],
+        # 阈值按语言分开，均为**实测标定值**（各 300 条 1:1 平衡样本）：
+        #   英文 (12, 25)        -> acc 93.67%  FPR 5.19%
+        #   中文 (11.35, 18.72)  -> acc 74.67%  FPR 29.58%
+        # 数据：Ghostbuster Student Essay / HC3-Chinese
+        # 详见 docs/calibration/ppl_calib_{zh,en}.txt
+        # 为什么要分：英文 human 的 PPL 中位 29.50、中文只有 17.18 ——
+        # 同一组阈值对中文会把大段人写文本判进插值区间。
+        "params": {
+            "ppl_high": 25.0,
+            "ppl_low": 12.0,
+            "ppl_high_zh": 18.72,
+            "ppl_low_zh": 11.35,
+        },
         "update_channel": "models",
     },
     {
@@ -84,7 +96,7 @@ BUILTIN_ENGINES = [
         "venue": "ICLR 2024",
         "desc": "原论文的采样近似实现：用模型自身采样近似曲率，无需训练数据。模型大，建议独立显卡。",
         "desc_en": "Sampling-based approximation of the original method: conditional probability curvature via self-sampling, no training data needed. Large model, GPU recommended.",
-        "tags": ["零样本", "需显卡"],
+        "tags": ["零样本", "需显卡", "英文"],
         "params": {"mode": "fast", "samples": 5, "threshold": 0.0, "scale": 0.6},
         "update_channel": "models",
     },
@@ -104,7 +116,7 @@ BUILTIN_ENGINES = [
         "venue": "斯坦福 · ICML 2023 (Oral)",
         "desc": "论文的掩码扰动实现：用 T5 对原文做局部改写生成扰动样本，比较对数概率曲率。比 Fast 版更忠实原文，也更慢。",
         "desc_en": "Masked-perturbation implementation: T5 rewrites short spans to build perturbed samples, then compares log-probability curvature. Slower but closer to the paper.",
-        "tags": ["零样本", "CPU 勉强可跑"],
+        "tags": ["零样本", "CPU 勉强可跑", "英文"],
         "params": {"mode": "detect", "samples": 10, "mask_ratio": 0.15, "threshold": 0.0, "scale": 0.6},
         "update_channel": "models",
     },
@@ -122,10 +134,16 @@ BUILTIN_ENGINES = [
         "size_hint": "约 1.9GB",
         "paper": "arXiv:2401.12070",
         "venue": "ICML 2024",
-        "desc": "一对同词表模型交叉打分，只看比值不看绝对困惑度，不用调阈值就跨领域通用。轻量组合 CPU 也可跑。",
-        "desc_en": "Two same-tokenizer models score the text cross-wise; the ratio is threshold-free and transfers across domains. CPU-capable in the light configuration.",
-        "tags": ["零样本", "免调阈值"],
-        "params": {"threshold": 0.9015, "scale": 0.12},
+        "desc": "一对同词表模型交叉打分（对数困惑度 / 对数交叉困惑度），只看比值不看绝对困惑度。轻量组合 CPU 也可跑。",
+        "desc_en": "Two same-tokenizer models score the text cross-wise (logPPL / log-xPPL); the ratio is used instead of raw perplexity. CPU-capable in the light configuration.",
+        "tags": ["零样本", "双模型", "英文"],
+        # threshold/scale 是**实测标定值**，不是论文原值。
+        # 论文的 0.901 绑定 Falcon-7B-Instruct + Falcon-7B；本项目用 gpt2 组合，
+        # 论文附录 A.1.2 要求换模型后重标（"optimize using accuracy"）。
+        # 标定数据：Ghostbuster Student Essay 1:1 平衡样本 120 条，
+        #           最优阈值 0.615，准确率 94.17%，FPR 4.84%。
+        # 详见 docs/calibration/calib_binoculars_dev.json
+        "params": {"threshold": 0.615, "scale": 0.12},
         "update_channel": "models",
     },
     # ------------------------------------------------------------ 修复 / 降重

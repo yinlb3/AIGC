@@ -2,7 +2,7 @@
 """AIGC_Toolkit 全功能冒烟测试（不依赖 torch 可用）。"""
 import sys, os, re, traceback
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ok, fail = [], []

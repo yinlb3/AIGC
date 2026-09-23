@@ -1,0 +1,12 @@
+====================================================================
+essay-only  n=200
+  max_tokens=0     acc=0.9400 FPR=0.0312 FNR=0.0865  TP=95 FP=3 TN=93 FN=9
+  max_tokens=512   acc=0.9250 FPR=0.0312 FNR=0.1154  TP=92 FP=3 TN=93 FN=12
+  max_tokens=1024  acc=0.9400 FPR=0.0312 FNR=0.0865  TP=95 FP=3 TN=93 FN=9
+
+====================================================================
+essay+reuter+wp  n=200
+  max_tokens=0     acc=0.5400 FPR=0.0400 FNR=0.8800  TP=12 FP=4 TN=96 FN=88
+  max_tokens=512   acc=0.5400 FPR=0.0300 FNR=0.8900  TP=11 FP=3 TN=97 FN=89
+  max_tokens=1024  acc=0.5400 FPR=0.0400 FNR=0.8800  TP=12 FP=4 TN=96 FN=88
+

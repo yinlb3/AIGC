@@ -52,8 +52,39 @@ def _pick_lang(zh, en):
     return zh or en or ""
 
 
+# 界面上的语言标注。项目定位是「中英双语论文查重」，而除 simpleai 外其余
+# 引擎都源自英文模型（实测：中文场景下 binoculars 的 FNR 100%、simpleai 的
+# 英文 FPR 100%），不标注的话用户会拿到看起来合理但完全错误的结果。
+# 判据取条目 tags 里的「中文 / 英文」。
+_LANG_MARK = {"zh": "🌐 中文", "en": "🌐 英文"}
+
+
+def engine_lang_mark(engine):
+    """返回「🌐 中文」/「🌐 英文」/「🌐 中英」/空串。
+
+    实测依据（docs/calibration/）：
+        simpleai   中文 99.75% / 英文不可用
+        gltr       中文 74.7%  / 英文 93.67%
+        binoculars 中文 71.5%  / 英文 94.17%
+        detectgpt  中文未测    / 英文 90%
+        fastdetectgpt 待测
+    """
+    tags = engine.get("tags") or []
+    has_zh = any("中文" in str(t) for t in tags)
+    has_en = any("英文" in str(t) for t in tags)
+    if has_zh and has_en:
+        return "%s / 英文" % _LANG_MARK["zh"]
+    if has_zh:
+        return _LANG_MARK["zh"]
+    return _LANG_MARK["en"]
+
+
 def engine_label(engine):
-    return _pick_lang(engine.get("name"), engine.get("name_en")) or engine.get("id", "")
+    mark = engine_lang_mark(engine)
+    name = _pick_lang(engine.get("name"), engine.get("name_en")) or engine.get("id", "")
+    if mark and mark not in name:
+        return "%s %s" % (mark, name)
+    return name
 
 
 def model_state(base_dir, engine):

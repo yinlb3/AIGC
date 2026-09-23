@@ -83,11 +83,10 @@ class DetectWorker(QThread):
             self.step.emit(tr("preparing_model"), 4)
             engine.install(lambda pct, msg: self.step.emit(msg, 4 + int(pct * 0.10)))
 
-            eparams = dict(cfg.get("params", {}))
-            if "max_len" in self.params:
-                eparams["max_len"] = self.params["max_len"]
-            run_params = dict(self.params)
-            run_params.update(eparams)
+            # 参数合并：先铺引擎清单里的默认值，再用界面参数覆盖 ——
+            # 顺序反了会让用户调好的阈值被清单默认值悄悄改回去。
+            run_params = dict(cfg.get("params", {}))
+            run_params.update(self.params)
 
             def prog(done, total):
                 pct = 15 + int(82 * done / max(total, 1))
@@ -368,10 +367,17 @@ class MainWindow(QMainWindow):
 
     # ---- 引擎 ----
     def _reload_engines(self):
-        """检测引擎下拉只列「检查」类；修复 / 评测类在引擎管理里单独入口。"""
+        """检测引擎下拉只列「检查」类；修复 / 评测类在引擎管理里单独入口。
+
+        名称带语言标注（🌐 中文 / 🌐 英文）：项目定位是中英双语查重，而除
+        simpleai 外其余引擎都源自英文模型，拿它们测中文会得到完全错误的
+        结果（实测 binoculars 的中文 FNR 100%），标注可避免误用。
+        """
+        from ui.engine_dialog import engine_label
+
         self.engine_combo.clear()
         for e in self.mgr.runnable():
-            self.engine_combo.addItem(e["name"], e["id"])
+            self.engine_combo.addItem(engine_label(e), e["id"])
         idx = self.engine_combo.findData(self.settings.get("detect", "engine", default="simpleai"))
         if idx >= 0:
             self.engine_combo.setCurrentIndex(idx)

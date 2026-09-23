@@ -17,7 +17,7 @@ def build_report(paragraphs, probs, ratio, file_name, engine_name, threshold=0.5
             % (bg, tr("para_n") % i, bg, color, tr("ai_prob") % (prob * 100), bg, snippet)
         )
     html = [
-        "<h2>%s</h2>" % file_name,
+        "<h2>%s</h2>" % escape(str(file_name)),
         "<p style='font-size:17px'>%s</p>"
         % tr("report_summary") % (engine_name, ratio * 100, threshold * 100),
         "<p>%s</p>" % tr("report_legend"),

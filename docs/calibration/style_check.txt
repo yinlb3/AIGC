@@ -1,0 +1,62 @@
+==========================================================================
+原作者代码格式检查（git 已跟踪的 41 个 .py）
+==========================================================================
+
+【1】行长 > 100 字符（PEP8 上限 79，这里用宽松阈值）
+   app/core/i18n.py                               30 处，最长 500
+   app/core/engines/catalog.py                    15 处，最长 190
+   app/ui/glass.py                                 7 处，最长 122
+   app/core/aigc_rules.py                          6 处，最长 189
+   tools/fusion_selftest.py                        6 处，最长 151
+   app/core/diagnosis.py                           3 处，最长 244
+   app/diag_startup.py                             2 处，最长 111
+   app/ui/engine_dialog.py                         2 处，最长 116
+   app/ui/main_window.py                           2 处，最长 111
+   app/ui/rewrite_dialog.py                        2 处，最长 111
+   installer/installer.py                          2 处，最长 110
+   tools/test_engines.py                           2 处，最长 102
+   app/core/logging_setup.py                       1 处，最长 113
+   app/first_run.py                                1 处，最长 105
+   app/ui/benchmark_dialog.py                      1 处，最长 101
+   tools/smoke_test.py                             1 处，最长 118
+
+【2】行长 > 79 字符（PEP8 标准）—— 仅列前 12 个文件
+   合计 400 处，涉及 34 个文件
+   app/core/i18n.py                               60 /  646 行 (9%)
+   app/core/benchmark.py                          35 /  387 行 (9%)
+   app/ui/main_window.py                          26 /  782 行 (3%)
+   app/core/aigc_rules.py                         24 /  557 行 (4%)
+   installer/installer.py                         24 /  857 行 (3%)
+   app/ui/glass.py                                22 /  248 行 (9%)
+   app/ui/rewrite_dialog.py                       22 /  588 行 (4%)
+   app/ui/engine_dialog.py                        20 /  393 行 (5%)
+   app/core/engines/catalog.py                    18 /  230 行 (8%)
+   tools/test_engines.py                          15 /  409 行 (4%)
+   app/core/about_text.py                         14 /  336 行 (4%)
+   app/core/engines/curvature_engine.py           12 /  247 行 (5%)
+
+【3】制表符缩进（应为空格）
+   无
+
+【4】行尾空白
+   无
+
+【5】缺少编码声明（文件含非 ASCII 但首两行无 coding）
+   app/core/about_text.py、app/core/cluster.py、app/core/detector.py、app/core/doc_reader.py、app/core/license.py、app/core/logging_setup.py、app/core/meta.py、app/core/report.py、app/core/settings.py、app/first_run.py、app/main.py、app/ui/glass.py、app/ui/main_window.py、installer/installer.py
+
+【6】裸 except（`except:` 不带异常类型）
+   无
+
+【7】`== None` / `!= None`（应写 is None / is not None）
+   无
+
+【8】可变类型作默认参数（def f(x=[]) 之类）
+   无
+
+【9】引擎模块里的 print(（应为日志）
+   无
+
+【10】TODO / FIXME / XXX / HACK 注释
+   app/core/engines/binoculars_engine.py:40  TODO（论文原版模型，见 docs/AUDIT_2026-09-22.md）
+   app/core/engines/perplexity_engine.py:26  AUC 0.71）。按 rank 四档重做见 docs/AUDIT_2026-09-22.md 的 TODO-3。
+

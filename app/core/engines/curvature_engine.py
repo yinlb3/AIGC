@@ -16,6 +16,7 @@
 
 换模型不用改这里的代码：清单里 ``models`` 写什么就用什么。
 """
+import math
 import random
 import re
 
@@ -74,6 +75,18 @@ class CurvatureEngine(BaseEngine):
         self, paragraphs, device, samples, threshold, scale,
         max_tokens, prompt_ratio, progress_cb,
     ):
+        """Fast-DetectGPT（arXiv:2310.05130v3 §2.3 式 3）。
+
+        ::
+
+            d = ( log p_theta(x|x) - mu_tilde ) / sigma_tilde
+
+        其中 mu_tilde / sigma_tilde 是采样样本分数的均值与**标准差**
+        （式 4：``sigma_tilde^2`` 是方差，故式 3 的分母取 sqrt）。
+        论文 §3.2 的消融明确：这个归一化是有效性的关键，不能省。
+
+        归一化后 d 是无量纲量，阈值才具备跨文本长度/领域的可比性。
+        """
         tok = self.tok(0)
         model = self.mdl(0, device)
         out = []
@@ -92,9 +105,18 @@ class CurvatureEngine(BaseEngine):
                 lp = self.avg_logprob(fake, model, tok, device, max_tokens=max_tokens)
                 if lp != float("-inf"):
                     perturbed.append(lp)
-            if perturbed:
+            if len(perturbed) >= 2:
                 mean_pert = sum(perturbed) / len(perturbed)
-                out.append(squash(base - mean_pert, threshold, scale))
+                # 样本标准差（分母 n-1，与论文 Algorithm 1 第 4 步一致）
+                var = sum((x - mean_pert) ** 2 for x in perturbed) / (
+                    len(perturbed) - 1
+                )
+                sigma = math.sqrt(var)
+                curvature = (base - mean_pert) / sigma if sigma > 1e-9 else 0.0
+                out.append(squash(curvature, threshold, scale))
+            elif perturbed:
+                # 只有 1 个样本时估不出方差，退化为未归一化的旧行为
+                out.append(squash(base - perturbed[0], threshold, scale))
             else:
                 out.append(0.5)
             self._tick(progress_cb, i, total)
@@ -130,6 +152,22 @@ class CurvatureEngine(BaseEngine):
         self, paragraphs, device, samples, mask_ratio, span_max,
         threshold, scale, max_tokens, progress_cb,
     ):
+        """DetectGPT（arXiv:2301.11305v2 §4 Algorithm 1）。
+
+        ::
+
+            d_hat_x = ( log p_theta(x) - mu_tilde ) / sqrt( sigma_tilde )
+
+        论文 Algorithm 1 第 3~5 步：
+            3: mu_tilde  <- (1/k) * sum_i log p_theta(x_tilde_i)
+            4: sigma_tilde^2 <- (1/(k-1)) * sum_i (log p_theta(x_tilde_i) - mu_tilde)^2
+            5: d_hat_x <- ( log p_theta(x) - mu_tilde ) / sqrt(sigma_tilde)
+
+        注意第 4 步算的是**方差**，第 5 步取 sqrt 才是标准差 —— 与
+        Fast-DetectGPT 式 (3) 的记号不同，这里以各论文自身的写法为准。
+        论文 §5.3 指出：正因为有了这个归一化，阈值（"slightly below 0.1"）
+        才能跨数据分布通用。
+        """
         tok = self.tok(0)
         model = self.mdl(0, device)
         t5tok = self.tok(1)
@@ -152,9 +190,16 @@ class CurvatureEngine(BaseEngine):
                 lp = self.avg_logprob(fake, model, tok, device, max_tokens=max_tokens)
                 if lp != float("-inf"):
                     perturbed.append(lp)
-            if perturbed:
+            if len(perturbed) >= 2:
                 mean_pert = sum(perturbed) / len(perturbed)
-                out.append(squash(base - mean_pert, threshold, scale))
+                var = sum((x - mean_pert) ** 2 for x in perturbed) / (
+                    len(perturbed) - 1
+                )
+                # Algorithm 1 第 5 步：除以 sqrt(sigma_tilde^2)
+                curvature = (base - mean_pert) / math.sqrt(var) if var > 1e-18 else 0.0
+                out.append(squash(curvature, threshold, scale))
+            elif perturbed:
+                out.append(squash(base - perturbed[0], threshold, scale))
             else:
                 out.append(0.5)
             self._tick(progress_cb, i, total)
@@ -174,6 +219,13 @@ class CurvatureEngine(BaseEngine):
             return None
         left = t5tok.decode(ids[:s], skip_special_tokens=True)
         right = t5tok.decode(ids[e:], skip_special_tokens=True)
+        # T5 输入上限 512，拼接后可能超限 -> 两侧各自截断，保证总量可控
+        budget = 380
+        half = budget // 2
+        if len(left) > half:
+            left = left[-half:]
+        if len(right) > half:
+            right = right[:half]
         prompt = "<extra_id_0> %s <extra_id_1> %s" % (left, right)
         enc = t5tok(prompt, return_tensors="pt", truncation=True, max_length=512)
         enc = {k: v.to(device) for k, v in enc.items()}
