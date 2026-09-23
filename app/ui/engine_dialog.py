@@ -67,7 +67,7 @@ def _pick_lang(zh, en):
 #   _USABILITY   该语言下的可用性（仅在有实测数据时才给）
 #
 # ⚠️ 没有实测数据的引擎不得标可用性 —— 那会让用户以为有依据。
-#    未标定时由 `engine_lang_mark()` 回落到「未标定」。
+#    未标定时由 `engine_lang_mark()` 回落到单个符号 ❔。
 #
 # 判据取条目 tags 里的语言标记，故改 tags 即改界面显示。
 _LANG_MARK = {"zh": "🌐 中文", "en": "🌐 英文"}
@@ -87,6 +87,11 @@ _USABILITY_TAG = {
 # 未标定：没有实测数据时用，明确告诉用户"这个结论还没有"。
 # 与「中文不可用」不同 —— 后者是**测出来不可用**，前者是**还没测**。
 _UNMEASURED_TAG = "未标定"
+# 界面上**只显示这一个符号**，不带文字：列表列宽有限，文字会把引擎名挤掉；
+# 含义由该行的**悬停提示**说明（i18n 的 mark_tip_unmeasured，鼠标移上去弹出）。
+# **必须用 ❔ 而不是 ⚠️** —— ⚠️ 已被「有结论但弱」占用，两者语义恰相反：
+# ⚠️ 是"测出来差"，❔ 是"还没测"。
+_UNMEASURED_MARK = "❔"
 
 
 def engine_lang_mark(engine):
@@ -95,13 +100,17 @@ def engine_lang_mark(engine):
     格式：``🌐 语言`` + 可用性后缀。
     例：``🌐 中文 / 英文 ⚠️ 中文弱``、``🌐 英文 ❌ 中文勿用``
 
+    **未标定的引擎只回一个符号 ``❔``**（不带语言前缀，也不带文字）——
+    没有实测数据时"适用哪门语言"同样未知，标语言反而是编造。
+    含义由该行悬停提示说明（见 ``refresh()`` 里的 ``setToolTip``）。
+
     实测依据（docs/HANDOFF.md §5.10 与 docs/calibration.md）：
         simpleai       中文 AUC 0.9998    ✅ 中文可交付
         zh_perplexity  中文 acc 0.6300    ⚠️ 中文弱
         gltr           中文无可行阈值     ⚠️ 中文勿用
         binoculars     中文 0.7250        ⚠️ 中文弱
         detectgpt      中文 AUC 0.2800    ❌ 中文反向
-        fastdetectgpt  **未标定**         -> 标「未标定」，不猜
+        fastdetectgpt  中英均未标定        ❔（不猜）
 
     注意 1：**语言无关的引擎返回空串**（修复 / 评测类 —— 规则降重、
     知网诊断、评测基准），它们不该显示语言前缀。
@@ -115,9 +124,9 @@ def engine_lang_mark(engine):
     has_en = any("英文" in str(t) for t in tags)
 
     # 「未标定」比语言归属更重要：它表示**连适用哪门语言都还没测**。
-    # 这种情况单独显示，不参与中/英前缀拼接。
+    # 这种情况单独显示，不参与中/英前缀拼接 —— 只回一个符号。
     if _UNMEASURED_TAG in tagset:
-        return "%s / 英文 ❔ %s" % (_LANG_MARK["zh"], _UNMEASURED_TAG)
+        return _UNMEASURED_MARK
 
     # **语言无关**的引擎不标语言（修复 / 评测类：规则降重、知网诊断、
     # 评测基准）。它们的 tags 里既无「中文」也无「英文」，此前会落进
@@ -240,6 +249,11 @@ class EngineDialog(QDialog):
                     tag = "%s · %s" % (tag, tr("tag_custom"))
                 child = QTreeWidgetItem([engine_label(e), tag])
                 child.setData(0, Qt.UserRole, e["id"])
+                # 未标定的引擎名字前只有一个 ❔，没有文字说明 —— 含义靠悬停提示补。
+                # 只给这一种设提示：其余标记自带文字（"✅ 可用"、"⚠️ 中文弱"、
+                # "❌ 中文勿用"），看一眼就懂，再加提示是冗余。
+                if engine_lang_mark(e) == _UNMEASURED_MARK:
+                    child.setToolTip(0, tr("mark_tip_unmeasured"))
                 head.addChild(child)
             head.setExpanded(True)
         if self.tree.topLevelItemCount():

@@ -52,21 +52,51 @@ tools/probes/  →  tools/export_calibration.py  →  app/core/engines/engines_c
 
 优先级：`catalog.py 出厂值 < 标定值 < 远端 < 用户覆盖`
 
+### 新增模块（2026-09-24）
+
+| 模块 | 作用 |
+|---|---|
+| `app/core/gpuinfo.py` | 显卡 / CUDA 探测（**纯标准库**，零依赖）：读 `nvidia-smi` 的 `CUDA Version` → 选 `cuXXX` 索引；installer 与 first_run 共用同一份逻辑 |
+| `app/core/selfcheck.py` | 启动自检 L1–L3（依赖存在性 + 真 import + CUDA 可用），实测约 1.5 秒；主程序在后台线程调用，有问题才提示 |
+| `tools/probes/env_setup.py` | 探针：路径校验 / CUDA 映射 / 卸载器模板 / 进度解析 / 启动自检 |
+| `tools/probes/display_marks.py` | 探针：四档和恒为 100 / 柱状图边界 / 引擎语言标注 |
+
 ---
 
 ## 3. 待办
 
-**只列没做的**。做完的见 `FIXES.md`。
+**只剩 3 项**。按花费时间排序，有前置依赖的排后。（`FIXES.md` §3 有完整依据。）
 
-| 优先级 | 事项 | 卡点 |
-|---|---|---|
-| 高 | **`fastdetectgpt` 中英标定** | 需可用显存 ≥7GB。**唯一没数据的主力引擎** |
-| 高 | **`detectgpt` 中文换 mT5 扰动模型** | ✅ 论文给了方案（`FIXES.md` §2.4）：非英语要用 mT5。改清单即可，不用改代码 |
-| 中 | 采样数 k 提到 100 | 论文说 k=100 才收敛；慢 10~20 倍 |
-| 低 | **GLTR 四档柱状图**（论文原产物是涂色图 + 直方图）| **数字版已做**（每段下方一行「绿 x% │ 黄 x% │ 红 x% │ 紫 x%」），柱状图未做 |
+| 序 | 事项 | 耗时（实测） | 卡点 |
+|---|---|---|---|
+| 1 | **`fastdetectgpt` 中英标定** | **~5.5 小时**（中 15,216×1.01s=4.3h + 英 5,984×0.65s=1.1h）| 显存 free 14.7GB，**7GB 红线实测不成问题**；需与下一项排队用卡 |
+| 2 | `detectgpt` 中文换 `google/mt5-xl` → 标定 | 下载 ~1h + 标定 ~1.8h | 论文方案（`FIXES.md` §2.4）；扰动档按论文跑 `1,10,100` |
+| 3 | **pyright 剩 5 条 `reportUnusedImport` warning** | 分钟级 | `app/core/engines/__init__.py` 的对外接口 / 探测导入；**用户要求如实记录、不做抑制**，故 pending |
+
+**已撤销**：「采样数 k 提到 100」—— 查证原文与官方仓库后确认是**误判**：
+fast 路线的 `compute_crit()` 只做一次前向（解析式曲率，**没有 k 参数**），
+k 只属于 detectgpt 的掩码扰动，且论文一次跑 `1,10,100` 三档对照，已并入上表第 2 项。
+详见 `FIXES.md` §3。
 
 **已确认不做**：换论文的 Falcon-7B / T5-3B 打分模型、抓论文数据集（`FIXES.md` §1、§2.5）；
 改原作者文档；工程清理中的行长与编码声明。
+
+### 进度条问题：已复现、已定位、已修（2026-09-24）
+
+第二次标速按用户要求投到外部窗口、由用户**全程观察**，问题复现：
+5 条跑完 5 步，进度条**停在 `1/5 = 20%`** 不再前进，明细却全打出来了（用户截图）。
+
+**两个根因**：
+
+1. 循环内用 `print` 输出明细，与 tqdm 抢同一行，把进度条挤停在中途
+2. 每次只传 1 条文本调用引擎，`progress_cb` 的 `done` 每次从 1 重来，
+   `bar.update(done - last)` 第二次起等于 `update(0)`，只走 1 步
+
+**修法**：进度条活跃期输出一律用 `tqdm.write()`（禁用 `print`）；
+逐条调用时每次调用前重置 `last = 0`。**两条已写入 skill**（真源 + 4 副本同步，
+见 `FIXES.md` §8.6），标速脚本也已按此修好。
+
+**影响**：只影响长任务的可观测性，不动主线功能、不改变产出结果。
 
 **已解决**：
 
@@ -77,8 +107,9 @@ tools/probes/  →  tools/export_calibration.py  →  app/core/engines/engines_c
 | gltr 中文 | ✅ 已重标，确认**不可交付**（FNR 73%）；用 `zh_perplexity` 替代 |
 | **gltr / binoculars / simpleai 标定值** | ✅ **已全部由探针实跑写入 json**（此前是抄文档）|
 | **装机 / 界面 / 配置测试** | ✅ 三个探针（`package_flow` / `ui_flow` / `ui_config`），见 `FIXES.md` §6 |
-| **静态检查** | ✅ `npx --yes pyright` = 0 errors（配 `pyrightconfig.json`）；抓出 3 个"从没跑过所以没人发现"的错，见 `FIXES.md` §6.2 |
-
+| **真装机实测** | ✅ **2026-09-24 实跑 `perform_install()` + 卸载**，含「装完读到的是标定值」验证，见 `FIXES.md` §6.5 |
+| **GLTR 四档柱状图** | ✅ 2026-09-24 补上（原论文原产物），见 `FIXES.md` §8.1 |
+| **静态检查** | ✅ `npx --yes pyright` = **0 errors**（配 `pyrightconfig.json`）；另有 5 条 `reportUnusedImport` warning 如实 pending，见 §3 待办 |
 
 ---
 
@@ -107,6 +138,10 @@ tools/probes/  →  tools/export_calibration.py  →  app/core/engines/engines_c
 | 5 | **引用指标必须说明数据集** | 同一阈值换数据集，93.67% → 52.33% |
 | 6 | `settings.json` 含本机路径 | 发布前需删或改回默认 |
 | 7 | 单条耗时须先测 | `python tools/estimate_timing.py`；预估 >30 分钟先报告 |
+| 8 | **清华 pytorch 源已 404** | `mirrors.tuna.tsinghua.edu.cn/pytorch-wheels/` 整目录失效（实测）；国内只有**上海交大**同时有 `win_amd64`，阿里云 / 华为云只有 Linux 版 wheel |
+| 9 | **git 不读 Windows 系统代理** | 它只认 `http.proxy` 配置或 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量。临时走代理：`git -c http.proxy=http://127.0.0.1:7890 push`（**不写任何配置**）|
+| 10 | **`docx` 不是 python-docx** | PyPI 上的 `docx` 是 2014 年的另一个库，`pip install docx` 装错包；pip 名必须写 `python-docx` |
+| 11 | **同步规则副本要按目录结构** | 拷错层级会造成"真源是新的、AI 读到的却是旧的"——`SKILL.md` 引用 `references/`，把文件拷到根层等于没生效（实测踩过，持续两天）|
 
 ---
 

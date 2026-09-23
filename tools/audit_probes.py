@@ -70,6 +70,12 @@ REGISTRY = [
     ("logprob_chunk", "safe", "秒级",  "无（纯 torch.arange + 桩模型）",
      "avg_logprob 分块口径错（chunk 变则结果变，偏差 34~67%）",
      "cluster:run_logprob_chunk"),
+    ("env_setup",     "safe", "秒级（含 1.5 秒自检）", "无（只读源码 + 纯函数）",
+     "安装/环境：路径校验、CUDA 映射、卸载器模板、进度解析、启动自检",
+     "env_setup:run_env_setup"),
+    ("display_marks", "safe", "秒级（含 Qt 导入 1 秒）", "无（只调纯函数，不构造窗口）",
+     "展示层标记：报告四档和恒为 100、柱状图边界、引擎语言标注",
+     "display_marks:run_display_marks"),
 
     # ---------------- heavy：需显式指定 ----------------
     ("cluster_port",  "heavy", "十几秒", "**占 UDP 47650 / TCP 47651**（跑完释放）",

@@ -122,7 +122,7 @@ C:\ProgramData\miniconda3\envs\pytorch\python.exe tools\audit_probes.py      # s
 | `docs/CALIBRATION.md` | 标定数据 / 阈值依据 |
 | `docs/CHECK_FLOW.md` | **改完代码的五层检测流程**（穷举范围 + 边界 + i18n + 盲区）|
 | `docs/HANDOFF.md` | 交接说明 |
-| `tools/audit_probes.py` | 可复现探针（`--list`） |
+| `tools/audit_probes.py` | 可复现探针（29 个，`--list` 看组 / 代价 / 风险；safe 组默认跑） |
 | `tools/prepare_datasets.py` | 数据集加载（内存处理，不落盘） |
 | `tools/export_calibration.py` | 导出标定值（`--audit` 查漏） |
 

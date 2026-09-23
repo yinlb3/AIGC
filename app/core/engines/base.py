@@ -320,9 +320,11 @@ class BaseEngine:
 
         所以这里按 ``min(max_tokens, n_positions)`` 截断；``max_tokens=0``
         时用模型自身上限兜底。
-        """
-        import torch  # noqa: F401
 
+        为什么不需要显式 ``import torch``：本方法只用 ``tok()`` 的返回值
+        （``BatchEncoding``），下面的切片是张量切片，不引用 ``torch`` 里的
+        任何名字。历史上这一行是多余的，会被静态检查当成未用导入。
+        """
         enc = tok(text, return_tensors="pt", truncation=False)
         ids = enc.input_ids
         cap = int(max_tokens) if max_tokens else 0

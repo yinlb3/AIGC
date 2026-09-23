@@ -36,6 +36,8 @@ REQUIRED = [
     "first_run.py",
     "core/__init__.py",
     "core/settings.py",
+    "core/gpuinfo.py",
+    "core/selfcheck.py",
     "core/engines/__init__.py",
     "core/engines/manager.py",
     "core/engines/catalog.py",
