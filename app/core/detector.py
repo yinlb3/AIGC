@@ -22,11 +22,19 @@ def _devices(params):
 
 def _run_one_device(engine_cfg, base_dir, paragraphs, device, params, progress_cb=None):
     engine = create_engine(engine_cfg, base_dir)
-    return engine.predict_paragraphs(paragraphs, device, **params)
+    probs = engine.predict_paragraphs(paragraphs, device, **params)
+    # 一并回传引擎实例：统计派引擎会把逐段四档（GLTR Test-2）存在
+    # `last_buckets` 上，只返回 probs 的话那份数据就随实例一起丢了。
+    # 见 docs/FIXES.md §9。
+    return probs, engine
 
 
 def detect_local(engine_cfg, base_dir, paragraphs, params, progress_cb=None):
-    """本地检测：多张显卡时按段落分片并行，单卡/CPU 直接跑。"""
+    """本地检测：多张显卡时按段落分片并行，单卡/CPU 直接跑。
+
+    返回 ``(probs, engine)`` —— ``engine`` 是最先完成的那个实例，
+    调用方从它上面取 ``last_buckets``（四档）。多卡时四档取第一片的。
+    """
     if not TORCH_OK:
         raise RuntimeError(tr("torch_unavailable") % _torch_error())
     devices = _devices(params)
@@ -42,6 +50,7 @@ def detect_local(engine_cfg, base_dir, paragraphs, params, progress_cb=None):
         splits.append((devices[d], list(range(start, end))))
 
     results = [None] * total
+    first_engine = None
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(splits)) as ex:
         futures = []
@@ -49,17 +58,23 @@ def detect_local(engine_cfg, base_dir, paragraphs, params, progress_cb=None):
             sub = [paragraphs[i] for i in indices]
             futures.append(ex.submit(_run_one_device, engine_cfg, base_dir, sub, device, params))
         for fut, (device, indices) in zip(futures, splits):
-            probs = fut.result()
+            probs, eng = fut.result()
+            if first_engine is None:
+                first_engine = eng
             for i, p in zip(indices, probs):
                 results[i] = p
             done += len(indices)
             if progress_cb:
                 progress_cb(done, total)
-    return results
+    return results, first_engine
 
 
 def detect_with_cluster(engine_cfg, base_dir, paragraphs, params, master, progress_cb=None):
-    """集群检测：把段落分片发给局域网工作节点，本地也留一份兜底。"""
+    """集群检测：把段落分片发给局域网工作节点，本地也留一份兜底。
+
+    返回 ``(probs, engine)`` —— 与 ``detect_local`` 一致（engine 供取四档，
+    集群模式下四档拿不到，调用方按 None 处理）。
+    """
     nodes = master.nodes_snapshot()
     if not nodes:
         return detect_local(engine_cfg, base_dir, paragraphs, params, progress_cb)
@@ -88,7 +103,7 @@ def detect_with_cluster(engine_cfg, base_dir, paragraphs, params, master, progre
             except Exception:
                 # 工作节点失败时回退到本机计算该分片
                 sub = [paragraphs[i] for i in indices]
-                probs = _run_one_device(
+                probs, _eng = _run_one_device(
                     engine_cfg, base_dir, sub, _devices(params)[0], params
                 )
             for i, p in zip(indices, probs):
@@ -96,4 +111,5 @@ def detect_with_cluster(engine_cfg, base_dir, paragraphs, params, master, progre
             done += len(indices)
             if progress_cb:
                 progress_cb(done, total)
-    return results
+    # 集群模式的四档拿不到（分片在别的进程里算），故 engine 传 None
+    return results, None

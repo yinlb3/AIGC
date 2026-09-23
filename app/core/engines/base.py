@@ -221,35 +221,6 @@ class BaseEngine:
             raise
         except Exception:
             pass
-        """加载前粗估显存是否够用，不够就明确报错。
-
-        否则用户拿 8GB 显卡跑 2.7B 模型时不会看到任何错误，只会觉得
-        "软件卡死了"。
-        """
-        try:
-            import torch
-
-            if not (device and str(device).startswith("cuda")):
-                return
-            if not torch.cuda.is_available():
-                return
-            idx = 0
-            try:
-                idx = int(str(device).split(":")[1])
-            except Exception:
-                idx = 0
-            free, _total = torch.cuda.mem_get_info(idx)
-            # 粗略门槛：fp16 下权重约占 (参数量 x 2 字节)，再留 2GB 给激活值
-            if free < 2 * 1024 ** 3:
-                raise RuntimeError(
-                    "显存不足：%s 当前可用 %.1fGB，低于 2GB 下限。"
-                    "请关闭占用显卡的程序，或在设置里改用 CPU 运行。"
-                    % (repo, free / 1024 ** 3)
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass
 
     def _from_pretrained(self, loader, repo, **kw):
         """离线优先：本地缓存命中就直接用，没有再联网下载。"""

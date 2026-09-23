@@ -47,6 +47,61 @@ def head(tag, title):
     print("=" * 68)
 
 
+# --------------------------------------------------------------- 标定值落盘
+CALIB_PATH = os.path.join(APP, "core", "engines", "engines_calibration.json")
+
+
+def save_calibration(engine_id, params, meta):
+    """把标定结果**直接写入** ``engines_calibration.json``。
+
+    为什么要有这个函数：标定值是**跑出来的**，不该由人手抄进代码或文档
+    （抄写会错、会忘、无法追溯）。探针跑完就写盘，程序启动时自动读取。
+
+    :param engine_id: 引擎 id（如 ``"binoculars"``）
+    :param params:    要覆盖的参数，如 ``{"threshold": 0.83, "scale": 0.12}``
+    :param meta:      出处，写入 ``_calibration`` 字段（n / acc / criterion / tool / date …）
+
+    **合并语义**：同 id 已存在则更新其 params 与 _calibration；不存在则新增。
+    其它引擎的条目不动。
+    """
+    import json
+
+    try:
+        if os.path.isfile(CALIB_PATH):
+            with io.open(CALIB_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {"version": "1.0", "updated": "", "note": "", "engines": []}
+    except Exception:
+        data = {"version": "1.0", "updated": "", "note": "", "engines": []}
+
+    engines = data.setdefault("engines", [])
+    found = False
+    for e in engines:
+        if e.get("id") == engine_id:
+            e["params"] = params
+            e["_calibration"] = meta
+            found = True
+            break
+    if not found:
+        engines.append({"id": engine_id, "params": params, "_calibration": meta})
+
+    import datetime
+    data["updated"] = datetime.date.today().isoformat()
+    data.setdefault(
+        "note",
+        "标定结果覆盖表。由标定探针写入（probes.save_calibration），"
+        "优先级高于内置 catalog.py。_calibration 记录样本量、判据与出处。")
+
+    os.makedirs(os.path.dirname(CALIB_PATH), exist_ok=True)
+    with io.open(CALIB_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    print("      [已写入] %s <- %s" % (os.path.basename(CALIB_PATH), engine_id))
+    return CALIB_PATH
+
+
+
 def setup_stdout():
     """控制台编码不可靠（PowerShell 下中文会乱码），强制 utf-8。"""
     try:
@@ -54,3 +109,4 @@ def setup_stdout():
             sys.stdout.buffer, encoding="utf-8", errors="replace")
     except Exception:
         pass
+

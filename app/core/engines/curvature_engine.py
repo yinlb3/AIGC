@@ -124,7 +124,27 @@ class CurvatureEngine(BaseEngine):
 
     @staticmethod
     def _self_sample(text, model, tok, device, max_tokens, prompt_ratio):
-        """以原文前半为前缀让模型自己续写，得到扰动样本 x̃。"""
+        """构造扰动样本 x̃ —— 论文 §2.3 的 **Conditional Independent Sampling**。
+
+        为什么不能用 ``model.generate()``
+        ----------------------------------
+        论文（arXiv:2310.05130v3 §2.3）原文：
+
+        > This sampling strategy is named **Conditional Independent Sampling**
+        > ... we sample each token x̃_j **independently** from
+        > q_phi(x̃_j | x_<j), where the conditioning is **only on the original
+        > prefix** x_<j and **not on the previously sampled tokens**.
+
+        即：每个 x̃_j 都只依赖**原文前缀**，彼此之间**不依赖**。
+        而 `model.generate()` 是自回归的 —— 后一个 token 依赖前一个**已生成的**
+        token，产出的分布不是论文要的 q_φ，样本多样性也偏低。
+
+        做法：一次前向拿到整段 logits，再对每个位置**从各自的条件分布里
+        独立抽样**。N 次采样因此可压成「1 次前向 + N 次抽样」，
+        比 N 次串行 generate 快得多 —— 这也是论文叫 Fast 的原因之一。
+
+        :param prompt_ratio: 原文保留作前缀的比例（其余位置待采样）
+        """
         import torch
 
         enc = tok(text, return_tensors="pt", truncation=True, max_length=max_tokens)
@@ -133,19 +153,18 @@ class CurvatureEngine(BaseEngine):
         if n < 4:
             return None
         plen = max(1, min(n - 1, int(n * prompt_ratio)))
-        pad = getattr(tok, "pad_token_id", None)
-        if pad is None:
-            pad = getattr(tok, "eos_token_id", 0) or 0
         with torch.no_grad():
-            seq = model.generate(
-                ids[:, :plen],
-                do_sample=True,
-                top_p=0.96,
-                temperature=1.0,
-                max_new_tokens=n - plen,
-                pad_token_id=pad,
-            )
-        return tok.decode(seq[0], skip_special_tokens=True)
+            logits = model(ids).logits[0]          # (n, vocab)
+        # 位置 j 的条件分布来自前一位 j-1 的 logits（因果 LM 的 shift）
+        # 逐位独立采样：每个位置各抽一次，互不影响
+        gen = []
+        for j in range(plen, n):
+            probs = torch.softmax(logits[j - 1].float(), dim=-1)
+            gen.append(int(torch.multinomial(probs, 1).item()))
+        if not gen:
+            return None
+        new_ids = torch.cat([ids[0, :plen], torch.tensor(gen, device=device)])
+        return tok.decode(new_ids.tolist(), skip_special_tokens=True)
 
     # ---------------------------------------------------------- DetectGPT
     def _run_detect(

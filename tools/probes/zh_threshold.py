@@ -7,53 +7,60 @@ r"""`zh_perplexity` 引擎的阈值标定（用 tqdm 显示进度）。
     模型 `uer/gpt2-chinese-cluecorpussmall`
     阈值 `ppl_low=20 / ppl_high=45`
 
-但那是他的数字。本探针用**本项目的数据**（HC3-Chinese 200 条 1:1）重标，
-并给出三组指标供对照：
+但那是他的数字。本探针用**本项目的数据**重标，并给出多组指标对照：
     1. 原作者阈值 (20, 45)
     2. 本次实测最优阈值
-    3. **FPR≤5% 约束下的最优** ← 查重工具实际关心这个
+    3. **FPR<=5% 约束下的最优** <- 查重工具实际关心这个
+
+数据来源（2026-09-23 更换）
+--------------------------
+原先直接读 `hc3_zh_1to1.jsonl` 的前 N 条 —— 该文件**丢了 question**，
+且样本量是随手定的（200 -> 400）。现改用 `prepare_datasets.load_balanced`：
+
+* 论文 §5.3 口径：`We extracted all the <question, answer> pairs`
+* 论文 §4.1 口径：不平衡时 `randomly sample one answer from humans and
+  one answer from ChatGPT`（本实现按**问题配对**，更严）
+
+即：数据由 loader 负责展开/去重/配平，**原始文件不动**。
 
 进度用 tqdm 显示（每条一个 tick）。
 
-**副作用**：加载 gpt2-chinese（401MB，fp16 约 0.2GB），约 5 分钟。
+**副作用**：加载 gpt2-chinese（401MB，fp16 约 0.2GB）。实测单条 0.027 秒，
+15216 条约 7 分钟。
 """
-import json
+import sys
 import os
 
 from . import ROOT, head
 
-ZH_DATA = r"D:\hf_cache\hc3_zh_1to1.jsonl"
-N = 200
+# 新 loader 在 tools/ 下（探针在 tools/probes/），加一级路径
+_TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+
 REPO = "uer/gpt2-chinese-cluecorpussmall"
 CACHE = r"D:\hf_cache\zh_gpt2"
 
 # 原作者在 engines_manifest.json 里填的阈值
 AUTHOR_LOW, AUTHOR_HIGH = 20.0, 45.0
 
+# 历史标定值（供对照，见 docs/calibration.md §2.8）
+PREV_200 = (2.88, 7.68, 0.6300)      # 200 条时
+PREV_400 = (3.72, 9.92, 0.7875)      # 400 条时
 
-def _load(n):
-    half = max(1, n // 2)
-    ai, hu = [], []
-    with open(ZH_DATA, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            t = (row.get("text") or "").strip()
-            if len(t) < 20:
-                continue
-            lb = str(row.get("label", "")).strip()
-            if lb == "1" and len(ai) < half:
-                ai.append(t)
-            elif lb == "0" and len(hu) < half:
-                hu.append(t)
-            if len(ai) >= half and len(hu) >= half:
-                break
-    return [(t, 1) for t in ai] + [(t, 0) for t in hu]
+
+def _load(limit=0):
+    """取 1:1 平衡的中文集（论文 §4.1 口径，按问题配对）。
+
+    :param limit: 最多取多少条；0 = 全部
+    """
+    from prepare_datasets import load_balanced
+
+    rows = load_balanced("zh")
+    if limit:
+        rows = rows[:limit]
+    return [(r["text"], r["label"]) for r in rows]
+
 
 
 def _score_at(ppls, labels, lo, hi):
@@ -120,9 +127,10 @@ def run_zh_threshold(v):
         v.add("ZH-TH", False, "无 CUDA")
         return
 
-    rows = _load(N)
-    print("样本: n=%d（AI %d / 人写 %d）" % (len(rows), sum(1 for _, y in rows if y == 1),
-                                          sum(1 for _, y in rows if y == 0)))
+    rows = _load(0)                     # 0 = 用全部（论文 §4.1 平衡集）
+    n_ai = sum(1 for _, y in rows if y == 1)
+    print("样本: n=%d（AI %d / 人写 %d） 来源: prepare_datasets.load_balanced('zh')"
+          % (len(rows), n_ai, len(rows) - n_ai))
     print()
 
     # 用 gltr 的配置拿到引擎实例（impl 相同），但换成中文模型
@@ -147,10 +155,14 @@ def run_zh_threshold(v):
     model = eng.mdl(0, "cuda:0")
     print("模型: %s  dtype=%s" % (REPO, next(model.parameters()).dtype))
 
-    # tqdm 进度
+    # tqdm 进度：显示条数 / 百分比 / 速率 / 剩余时间
+    # （长任务必须可观测 —— 见 AGENTS.md「长任务必须带进度」）
     try:
         from tqdm import tqdm
-        it = tqdm(rows, desc="PPL", unit="条", ncols=78)
+        it = tqdm(rows, desc="PPL 打分", unit="条", ncols=90,
+                  mininterval=0.1, miniters=1,
+                  bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
+                             "[{elapsed}<{remaining}, {rate_fmt}]")
     except Exception:
         it = rows
 
@@ -182,13 +194,33 @@ def run_zh_threshold(v):
 
     best, best5 = _scan(vp, vy)
     if best[0]:
-        print("② 实测最优 (%.2f, %.2f):       acc=%.4f  FPR=%.4f"
+        print("② 本批实测最优 (%.2f, %.2f):  acc=%.4f  FPR=%.4f"
               % (best[0], best[1], best[2], best[3]))
     if best5[0]:
-        print("③ FPR<=5%% 最优 (%.2f, %.2f):   acc=%.4f  FPR=%.4f"
+        print("③ **本批 FPR<=5%% 最优 (%.2f, %.2f): acc=%.4f  FPR=%.4f**"
               % (best5[0], best5[1], best5[2], best5[3]))
     else:
-        print("③ FPR<=5% 最优: 无可行阈值")
+        print("③ 本批 FPR<=5% 最优: 无可行阈值")
+    print()
+
+    # ---------------------------------------------------- 历史对照
+    print("=" * 68)
+    print("历史标定对照（看阈值是否随样本量收敛）")
+    print("=" * 68)
+    print("%-16s %-16s %8s %8s" % ("样本量", "FPR<=5% 阈值", "acc", "FPR"))
+    for label, (lo, hi, acc) in (
+        ("200 条", PREV_200),
+        ("400 条", PREV_400),
+    ):
+        print("%-16s (%.2f, %.2f)%s%8.4f %8s"
+              % (label, lo, hi, " " * 4, acc, "--"))
+    if best5[0]:
+        cur = _score_at(vp, vy, best5[0], best5[1])
+        print("%-16s (%.2f, %.2f)%s%8.4f %8.4f   <- 本批 %d 条"
+              % ("本批", best5[0], best5[1], " " * 4, cur[0], cur[1], len(vp)))
+        print()
+        print("对照：200 条 -> 400 条时 acc 从 0.6300 涨到 0.7875（差 15.75 点）；")
+        print("      本批 %d 条的结果见上 —— 若与 400 条接近，说明已收敛。" % len(vp))
     print()
     print("对照：simpleai 中文 acc=0.9975 FPR=0.0050（基准）")
 

@@ -10,7 +10,6 @@
 **副作用**：加载模型、占显存；vram_spill 极慢（2.7B 模型）。
 """
 import os
-import sys
 
 from . import ROOT, head
 
@@ -294,31 +293,6 @@ def run_dtype_compare(v):
             eng._cache.clear()
             torch.cuda.empty_cache()
         return out
-
-    def ranks(x):
-        order = sorted(range(len(x)), key=lambda i: x[i])
-        r = [0] * len(x)
-        for pos, idx in enumerate(order):
-            r[idx] = pos
-        return r
-
-    def best_threshold(probs, labels):
-        best_t, best_acc = 0.5, -1.0
-        for t in sorted(set(probs)):
-            acc = sum(1 for p, y in zip(probs, labels)
-                      if (p >= t) == (y == 1)) / len(probs)
-            if acc > best_acc:
-                best_acc, best_t = acc, t
-        return best_t
-
-    def score_at(probs, labels, t):
-        tp = sum(1 for p, y in zip(probs, labels) if p >= t and y == 1)
-        fp = sum(1 for p, y in zip(probs, labels) if p >= t and y == 0)
-        tn = sum(1 for p, y in zip(probs, labels) if p < t and y == 0)
-        fn = sum(1 for p, y in zip(probs, labels) if p < t and y == 1)
-        n = len(probs)
-        return ((tp + tn) / n if n else 0.0,
-                fp / (fp + tn) if (fp + tn) else 0.0)
 
     def ranks(x):
         order = sorted(range(len(x)), key=lambda i: x[i])

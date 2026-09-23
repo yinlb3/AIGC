@@ -146,6 +146,8 @@ ZH = {
     "ai_prob": "AI 概率 %d%%",
     "report_summary": "引擎：%s ｜ AI 生成占比：<b>%.1f%%</b>（阈值 %.0f%%）",
     "report_legend": "黄色行 = 疑似 AI 生成段落（AI 概率 ≥ 阈值）：",
+    # 四档占比（GLTR Test-2）：逐 token 的 rank 落在哪一档
+    "bucket_cell": "绿 %d%% &nbsp;│&nbsp; 黄 %d%% &nbsp;│&nbsp; 红 %d%% &nbsp;│&nbsp; 紫 %d%%",
     "label_rewrite_suggest": "降重建议阈值",
     "btn_start_rewrite": "开始降重（检测→诊断→治疗）",
     "rewrite_suggest_title": "建议降重",
@@ -460,6 +462,7 @@ EN = {
     "ai_prob": "AI prob. %d%%",
     "report_summary": "Engine: %s | AI ratio: <b>%.1f%%</b> (threshold %.0f%%)",
     "report_legend": "Yellow rows = suspected AI paragraphs (AI prob. ≥ threshold):",
+    "bucket_cell": "Green %d%% &nbsp;│&nbsp; Yellow %d%% &nbsp;│&nbsp; Red %d%% &nbsp;│&nbsp; Purple %d%%",
     "label_rewrite_suggest": "Rewrite threshold",
     "btn_start_rewrite": "Rewrite (Detect → Diagnose → Treat)",
     "rewrite_suggest_title": "Rewrite recommended",

@@ -2,7 +2,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -51,7 +51,8 @@ else:
 
 class DetectWorker(QThread):
     step = Signal(str, int)
-    finished_ok = Signal(list, list, float, str, str)
+    # 第 6 项是逐段四档占比（GLTR Test-2），非统计派引擎为 None
+    finished_ok = Signal(list, list, float, str, str, object)
     failed = Signal(str)
 
     def __init__(self, path, engine_id, engine_name, params, base_dir, master):
@@ -96,14 +97,31 @@ class DetectWorker(QThread):
                 probs = detect_with_cluster(
                     cfg, self.base_dir, paras, run_params, self.master, prog
                 )
+                use_cluster = True
+                ran_engine = None
             else:
-                probs = detect_local(cfg, self.base_dir, paras, run_params, prog)
+                # detect_local 一并回传**真正跑检测的那个引擎实例** ——
+                # 上面的 self 里那个 engine 只用于 install()，检测是在
+                # detect_local 内部另建实例跑的，从它上面取不到四档。
+                probs, ran_engine = detect_local(
+                    cfg, self.base_dir, paras, run_params, prog
+                )
+                use_cluster = False
 
             valid = [p for p in probs if p is not None]
             ratio = sum(valid) / len(valid) if valid else 0.0
             self.step.emit(tr("generating_report"), 99)
+            # 四档（GLTR Test-2）走旁路：统计派引擎跑完存在实例属性上，
+            # 其他引擎没有这个概念（为 None）。走旁路而非改返回值，
+            # 是因为 `predict_paragraphs` 的 `list[float]` 被三处共用。
+            #
+            # 注：**集群模式暂不传四档** —— 分片在各节点跑，`last_buckets`
+            # 留在节点进程内，主窗口只拿到合并后的 probs。跨节点合并需另
+            # 设计协议，非本次范围（论文原产物是逐段涂色图）。
             self.finished_ok.emit(
-                paras, probs, ratio, os.path.basename(self.path), self.engine_name
+                paras, probs, ratio, os.path.basename(self.path),
+                self.engine_name,
+                None if use_cluster else getattr(ran_engine, "last_buckets", None)
             )
         except Exception as e:
             self.failed.emit(str(e))
@@ -694,7 +712,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("%s  v%s  |  %s" % (tr("app_name"), APP_VERSION, msg))
         self.title_bar.title.setText("%s  v%s  |  %s" % (tr("app_name"), APP_VERSION, msg))
 
-    def on_done(self, paras, probs, ratio, name, engine_name):
+    def on_done(self, paras, probs, ratio, name, engine_name, buckets=None):
         self.progress.setValue(100)
         self.result_label.setText("AI 生成占比：%.1f%%" % (ratio * 100))
         threshold = self.thr_slider.value() / 100.0
@@ -714,6 +732,7 @@ class MainWindow(QMainWindow):
                 engine_name,
                 threshold,
                 self.last_diag,
+                buckets,
             )
         )
         self.btn_start.setEnabled(True)

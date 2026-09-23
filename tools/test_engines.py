@@ -51,15 +51,18 @@ def test_catalog_nine_engines():
     from core.engines import catalog
 
     engines = catalog.BUILTIN_ENGINES
-    assert len(engines) == 9, "应有 9 个条目，实际 %d" % len(engines)
+    # 2026-09-23：10 个。原 9 个 + `zh_perplexity`（中文困惑度，TODO-8 方案 A）。
+    # 该条目原先只存在于 engines_manifest.json（原作者备好的），本次接进内置清单，
+    # 让中文侧除 simpleai 外多一个可用选项。
+    assert len(engines) == 10, "应有 10 个条目，实际 %d" % len(engines)
     ids = [e["id"] for e in engines]
-    assert len(set(ids)) == 9, "id 有重复：%s" % ids
+    assert len(set(ids)) == 10, "id 有重复：%s" % ids
     for e in engines:
         for key in ("id", "name", "category", "impl", "desc"):
             assert e.get(key), "%s 缺字段 %s" % (e.get("id"), key)
         assert e["category"] in ("detect", "repair", "benchmark"), e["category"]
         assert isinstance(e.get("models", []), list)
-    assert len(catalog.by_category("detect")) == 5
+    assert len(catalog.by_category("detect")) == 6
     assert len(catalog.by_category("repair")) == 2
     assert len(catalog.by_category("benchmark")) == 2
 
@@ -88,14 +91,15 @@ def test_manager_categories():
     tmp = _tmp()
     try:
         mgr = EngineManager(tmp)
-        assert len(mgr.all()) == 9
-        assert len(mgr.by_category("detect")) == 5
+        assert len(mgr.all()) == 10
+        assert len(mgr.by_category("detect")) == 6
         assert len(mgr.by_category("repair")) == 2
         assert len(mgr.by_category("benchmark")) == 2
         # 检测流程只应看到检查类引擎
         names = [e["id"] for e in mgr.runnable()]
         assert sorted(names) == sorted(
-            ["simpleai", "gltr", "fastdetectgpt", "detectgpt", "binoculars"]
+            ["simpleai", "gltr", "zh_perplexity", "fastdetectgpt", "detectgpt",
+             "binoculars"]
         ), names
         assert mgr.get("binoculars")["category"] == "detect"
         assert mgr.is_builtin("gltr") is True
@@ -120,7 +124,7 @@ def test_manager_local_override():
         assert e["name"] == "我的 GLTR", e["name"]
         assert e["model_id"] == "gpt2-medium"
         assert e["category"] == "detect", "覆盖时不应丢掉未声明的字段"
-        assert len(mgr.all()) == 9
+        assert len(mgr.all()) == 10
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -157,7 +161,8 @@ def test_manager_remote_manifest():
         assert ok is True, "拉取失败：%s" % added
         assert added == 1, added
         assert mgr.get("future_detector") is not None
-        assert len(mgr.by_category("detect")) == 6
+        # 6 个内置检查引擎 + 远端新加的 future_detector
+        assert len(mgr.by_category("detect")) == 7
         # 重新打开（模拟重启）后依然在
         mgr2 = EngineManager(tmp)
         assert mgr2.get("future_detector")["name"] == "未来新检测器"

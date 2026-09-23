@@ -4,9 +4,8 @@ import shutil
 
 from core.i18n import tr
 from ui.glass import fit_to_screen
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFileDialog,
     QGroupBox,

@@ -28,7 +28,6 @@ PPL 分布与英文差异大，中文阈值只能另标（11.35/18.72），且�
 repo 参数加载，**不改项目配置**。
 """
 import json
-import os
 
 from . import ROOT, head
 

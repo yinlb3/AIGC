@@ -3,7 +3,7 @@
 
 为什么要实测
 ------------
-`PAPER_GAPS.md` 记：
+`FIXES.md §2` 记：
 
     论文 k = 100（σ̃ 的精度收敛点）   项目 k = 5（fast）/ 10（detect）
     把采样数提到 100，重测 σ 归一化是否转为正收益（代价：慢 10~20 倍）
@@ -19,7 +19,6 @@
 10 条并逐条打进度。
 """
 import json
-import os
 import time
 
 from . import ROOT, head
@@ -143,8 +142,8 @@ def run_k_timing(v):
     print("汇总：采样数 → 单条耗时")
     print("=" * 68)
     print("%6s %12s %14s %14s" % ("k", "单条中位(s)", "200 条(分钟)", "相对 k=5"))
-    ref = results.get(K_LIST[0])
-    for k in K_LIST:
+    ref = results.get(K_PLAN[0][0])
+    for k, _n in K_PLAN:
         med = results.get(k)
         if med is None:
             print("%6d  未测" % k)

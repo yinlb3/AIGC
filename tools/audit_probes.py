@@ -23,7 +23,7 @@
   3. sys.path / stdout 包装 / ROOT 路径原本每脚本重复一遍
 
 **探针内部的验证逻辑一字未改** —— 改动仅限包成函数、统一公共部分。
-历史结论（见 docs/AUDIT.md）仍然成立。
+历史结论（见 docs/FIXES.md）仍然成立。
 """
 import argparse
 import os
@@ -53,7 +53,7 @@ REGISTRY = [
      "静态扫描：未用导入 / 行长 / 静默 except / 引擎参数签名",
      "static:run_static_scan"),
     ("style_report",  "safe", "秒级",  "无（只打控制台）",
-     "原作者代码风格核查 + 改动一致性（结论见 docs/calibration.md 三）",
+     "原作者代码风格核查 + 改动一致性（结论见 docs/CALIBRATION.md 三）",
      "static:run_style_report"),
     ("xformers_sig",  "safe", "秒级",  "无（只读 inspect 签名，不加载模型）",
      "transformers API 存在性（**有误报**，结论以 xformers_call 为准）",
@@ -105,6 +105,30 @@ REGISTRY = [
     ("zh_threshold", "heavy", "约 5 分钟", "加载 gpt2-chinese（约 0.2GB）",
      "zh_perplexity 引擎的阈值标定（TODO-8 方案 A，tqdm 进度）",
      "zh_threshold:run_zh_threshold"),
+    ("english_fpr",   "heavy", "约 4 分钟", "加载 simpleai + gpt2 组合（约 1.9GB）",
+     "英文侧 FPR<=5% 复核（acc 与可交付性是两件事，补齐英文标注依据）",
+     "english_fpr:run_english_fpr"),
+    ("holdout",       "heavy", "约 5 分钟", "加载 gpt2-chinese（约 0.2GB）",
+     "留出集验证：标定/评测按问题分开，检验指标是否过拟合",
+     "holdout:run_holdout"),
+    ("bino_cal",      "heavy", "约 8 分钟", "加载 gpt2 + gpt2-medium（约 1.9GB）",
+     "binoculars 英文阈值重标（现有 0.615 标自 120 条，已失效）",
+     "binoculars_calib:run_binoculars_calib"),
+    ("ui_flow",       "heavy", "约 2 分钟", "需 Qt 离屏；真跑一次检测（CPU）",
+     "界面交互测试：主窗口/引擎下拉/真跑检测/设置往返/降重对话框",
+     "ui_flow:run_ui_flow"),
+    ("package_flow",  "safe",  "秒级",  "无（只读文件，不写盘不碰注册表）",
+     "装机 / 发布流程静态检查：必需文件、标定数据位置、零依赖、卸载完整性",
+     "package_flow:run_package_check"),
+    ("ui_config",     "safe",  "秒级",  "无（只读源码）",
+     "UI 配置合理性：设置项是否真被使用、有无读了未声明的键、默认值是否合理",
+     "ui_config:run_config_check"),
+    ("gltr_cal",      "heavy", "约 10 分钟", "加载 gpt2（约 500MB）",
+     "gltr 中英阈值重标（现值抄自旧文档），结果写回 engines_calibration.json",
+     "gltr_calib:run_gltr_calib"),
+    ("simpleai",      "heavy", "约 8 分钟", "加载 simpleai 模型（约 780MB），CPU 跑",
+     "simpleai 中英实跑复核（acc/FPR/AUC），结果写回 engines_calibration.json",
+     "simpleai_check:run_simpleai_check"),
     ("vram_spill",    "heavy", "约 45 分钟", "加载 gpt-neo-2.7B、**可能溢出显存**",
      "溢出实测：fp32/fp16 都跑，跑时每秒采样共享显存",
      "model:run_vram_spill"),

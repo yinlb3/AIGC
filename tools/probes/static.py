@@ -18,144 +18,12 @@ SCAN_DIRS = [os.path.join(ROOT, "app"), os.path.join(ROOT, "installer"),
              os.path.join(ROOT, "tools")]
 
 
-def py_files():
-    for base in SCAN_DIRS:
-        for r, dirs, fs in os.walk(base):
-            if "__pycache__" in r:
-                continue
-            for f in fs:
-                if f.endswith(".py"):
-                    yield os.path.join(r, f)
-
-
 def _git(args):
+    """调 git 取已跟踪文件（风格核查只统计 git 跟踪的 .py）。"""
     return subprocess.check_output(["git"] + args, cwd=ROOT, text=True,
                                    errors="replace")
 
 
-def run_static_scan(v):
-    """3.1 未用导入 / 3.2 行长 / 3.3 静默 except / 3.4 引擎参数签名。"""
-    files = sorted(py_files())
-    head("3.1", "未使用导入（AST）")
-    print("扫描 .py 文件: %d 个" % len(files))
-    print()
-
-    unused = []
-    for fp in files:
-        try:
-            src = open(fp, encoding="utf-8").read()
-            tree = ast.parse(src)
-        except Exception as e:
-            print("  解析失败 %s: %s" % (os.path.basename(fp), e))
-            continue
-        imported = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for a in node.names:
-                    nm = (a.asname or a.name).split(".")[0]
-                    imported[nm] = node.lineno
-            elif isinstance(node, ast.ImportFrom):
-                for a in node.names:
-                    if a.name == "*":
-                        continue
-                    imported[a.asname or a.name] = node.lineno
-        used = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Name):
-                used.add(node.id)
-            elif isinstance(node, ast.Attribute):
-                p = node
-                while isinstance(p, ast.Attribute):
-                    p = p.value
-                if isinstance(p, ast.Name):
-                    used.add(p.id)
-        lines = src.splitlines()
-        for nm, ln in sorted(imported.items()):
-            if nm in used:
-                continue
-            if ln - 1 < len(lines) and "noqa" in lines[ln - 1]:
-                continue
-            unused.append((os.path.relpath(fp, ROOT), ln, nm))
-    print("未使用导入共 %d 处:" % len(unused))
-    for rel, ln, nm in unused:
-        print("   %-46s :%-4d %s" % (rel, ln, nm))
-
-    head("3.2", "行长超 80 字符（A9）")
-    rows = []
-    total_over = 0
-    for fp in files:
-        lines = open(fp, encoding="utf-8", errors="replace").read().splitlines()
-        over = [(i, len(l)) for i, l in enumerate(lines, 1) if len(l) > 80]
-        if over:
-            rows.append((os.path.relpath(fp, ROOT), len(lines), len(over),
-                         max(x[1] for x in over)))
-            total_over += len(over)
-    rows.sort(key=lambda r: -r[2])
-    print("超长行合计 %d 处，涉及 %d 个文件" % (total_over, len(rows)))
-    print("   %-46s %6s %6s %6s" % ("文件", "总行", "超长", "最长"))
-    for rel, tot, ov, mx in rows[:16]:
-        print("   %-46s %6d %6d %6d" % (rel, tot, ov, mx))
-
-    head("3.3", "静默 except（吞异常）")
-    silent = []
-    for fp in files:
-        lines = open(fp, encoding="utf-8", errors="replace").read().splitlines()
-        for i, l in enumerate(lines):
-            s = l.strip()
-            if s in ("pass", "continue") and i > 0:
-                prev = lines[i - 1].strip()
-                if prev.startswith("except") or prev.startswith("finally"):
-                    silent.append((os.path.relpath(fp, ROOT), i, prev, s))
-    print("静默 except 共 %d 处:" % len(silent))
-    for rel, ln, prev, s in silent:
-        print("   %-40s :%-4d %s -> %s" % (rel, ln, prev, s))
-
-    head("3.4", "引擎 predict_paragraphs 签名 vs benchmark 传参")
-    import inspect
-
-    from core.engines import catalog
-    from core.engines.rule_engine import CnkiDiagnoseEngine, RuleRewriteEngine
-
-    for cls in (RuleRewriteEngine, CnkiDiagnoseEngine):
-        sig = inspect.signature(cls.predict_paragraphs)
-        print("   %s.predict_paragraphs%s" % (cls.__name__, sig))
-    print()
-    print("   benchmark_dialog.py:212 传入 params = dict(cfg.get('params') or {})")
-    for eid in ("aigc_reduce", "cnki_skill", "raid", "mgtbench"):
-        e = catalog.by_id(eid)
-        print("   catalog[%s].params = %r" % (eid, e.get("params")))
-    print()
-    print("   -> 修复/评测类引擎 params 为空或少字段，predict_paragraphs")
-    print("      收到的是 {}，CnkiDiagnoseEngine 期待 probs/threshold，规则引擎期待 options")
-    cp = CnkiDiagnoseEngine(catalog.by_id("cnki_skill"), os.path.join(ROOT, "app"))
-    try:
-        r = cp.predict_paragraphs(["这段文本用于测试参数传递。"], None, **{})
-        print("   CnkiDiagnoseEngine.predict_paragraphs(**{}) -> %r" % r)
-    except Exception as e:
-        print("   抛错: %s: %s" % (type(e).__name__, e))
-    rp = RuleRewriteEngine(catalog.by_id("aigc_reduce"), os.path.join(ROOT, "app"))
-    try:
-        r = rp.predict_paragraphs(["这段文本用于测试参数传递。"], None, **{})
-        print("   RuleRewriteEngine.predict_paragraphs(**{}) -> %r" % r)
-    except Exception as e:
-        print("   抛错: %s: %s" % (type(e).__name__, e))
-    print()
-    print("   传入不存在的键会怎样:")
-    for k in ({"threshold": 0.5}, {"probs": [0.9]}):
-        try:
-            RuleRewriteEngine(catalog.by_id("aigc_reduce"), ROOT).predict_paragraphs(
-                ["测试文本内容。"], None, **k)
-            print("      RuleRewriteEngine **%r -> 未报错" % k)
-        except Exception as e:
-            print("      RuleRewriteEngine **%r -> %s: %s" % (k, type(e).__name__, e))
-        try:
-            CnkiDiagnoseEngine(catalog.by_id("cnki_skill"), ROOT).predict_paragraphs(
-                ["测试文本内容。"], None, **k)
-            print("      CnkiDiagnoseEngine **%r -> 未报错" % k)
-        except Exception as e:
-            print("      CnkiDiagnoseEngine **%r -> %s: %s" % (k, type(e).__name__, e))
-
-
 def py_files():
     for base in SCAN_DIRS:
         for r, dirs, fs in os.walk(base):
@@ -167,8 +35,32 @@ def py_files():
 
 
 def run_static_scan(v):
-    """3.1 未用导入 / 3.2 行长 / 3.3 静默 except / 3.4 引擎参数签名。"""
+    """3.0 BOM / 3.1 未用导入 / 3.2 行长 / 3.3 静默 except / 3.4 参数签名。"""
     files = sorted(py_files())
+
+    # ---- 3.0 BOM 检查（2026-09-23 新增）----
+    # `.py` 带 UTF-8 BOM 时 Python 能跑，但 `ast.parse` 会报
+    # `invalid non-printable character U+FEFF` —— 静态检查 / linter /
+    # 部分工具链会因此失败。常见成因：Windows 上用 PowerShell 的
+    # `Set-Content -Encoding UTF8` 或 `WriteAllText(..., UTF8Encoding $true)`
+    # 批量改文件，**两者都会写 BOM**。
+    head("3.0", "UTF-8 BOM 检查（.py 不应带 BOM）")
+    bom_files = []
+    for fp in files:
+        try:
+            with open(fp, "rb") as fh:
+                if fh.read(3) == b"\xef\xbb\xbf":
+                    bom_files.append(fp)
+        except Exception:
+            pass
+    if bom_files:
+        for fp in bom_files:
+            print("   **带 BOM**: %s" % os.path.relpath(fp, ROOT))
+        print("   -> 用 UTF8Encoding($false) 回写可去除")
+    else:
+        print("   无（%d 个文件全部干净）" % len(files))
+    print()
+
     head("3.1", "未使用导入（AST）")
     print("扫描 .py 文件: %d 个" % len(files))
     print()
@@ -256,11 +148,18 @@ def run_static_scan(v):
     print("   benchmark_dialog.py:212 传入 params = dict(cfg.get('params') or {})")
     for eid in ("aigc_reduce", "cnki_skill", "raid", "mgtbench"):
         e = catalog.by_id(eid)
-        print("   catalog[%s].params = %r" % (eid, e.get("params")))
+        # by_id 找不到时返回 None —— 直接 .get() 会 AttributeError。
+        # 加防护：清单变更后探针不该整个崩掉。
+        print("   catalog[%s].params = %r"
+              % (eid, e.get("params") if e else "**清单里没有该条目**"))
     print()
     print("   -> 修复/评测类引擎 params 为空或少字段，predict_paragraphs")
     print("      收到的是 {}，CnkiDiagnoseEngine 期待 probs/threshold，规则引擎期待 options")
-    cp = CnkiDiagnoseEngine(catalog.by_id("cnki_skill"), os.path.join(ROOT, "app"))
+    _cnki = catalog.by_id("cnki_skill")
+    if not _cnki:
+        print("   （跳过：清单里没有 cnki_skill）")
+        return
+    cp = CnkiDiagnoseEngine(_cnki, os.path.join(ROOT, "app"))
     try:
         r = cp.predict_paragraphs(["这段文本用于测试参数传递。"], None, **{})
         print("   CnkiDiagnoseEngine.predict_paragraphs(**{}) -> %r" % r)

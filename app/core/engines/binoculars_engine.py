@@ -60,6 +60,11 @@ class BinocularsEngine(BaseEngine):
         self,
         paragraphs,
         device,
+        # ⚠️ 缺省值只是**兜底**，正常路径由清单参数覆盖（见 engines_catalog.json）。
+        # 注意 0.9015 是**论文给 Falcon-7B + Falcon-7B-Instruct 的全局阈值**
+        # （arXiv:2401.12070v3 Table 1），本机用 gpt2 + gpt2-medium，
+        # **量纲/分布都不同，不可移植**。若调用方忘了传 threshold，
+        # 拿到的是这个不可用的值 —— 所以清单里必须显式给。
         threshold=0.9015,
         scale=0.12,
         max_tokens=512,

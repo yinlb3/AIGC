@@ -207,8 +207,6 @@ def run_cluster_discovery(v):
 
     print("配置 C) master 是否能分发任务到 worker（用桩引擎）")
     try:
-        import json
-
         from core.cluster import _recv_json, _send_json
 
         class StubEngine:
