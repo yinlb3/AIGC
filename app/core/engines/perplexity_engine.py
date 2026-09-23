@@ -19,7 +19,7 @@
 按文本语言自动切换。
 
 数据来源：Ghostbuster Student Essay（英）/ HC3-Chinese（中），
-详见 docs/calibration/ppl_calib_{zh,en}.txt
+详见 docs/calibration.md
 
 注：论文 GLTR（arXiv:1906.04043）的主特征是逐 token rank 四档分布
 （§4 实测 AUC 0.87），本实现用的是整段平均 PPL（Test-1 路线的退化版，

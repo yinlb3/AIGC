@@ -48,6 +48,26 @@
 | 文件头 | 不加 Founded / @author |
 | 编码声明 | 保持现状，不统一 |
 
+## 提交规约
+
+遵循 Conventional Commits 1.0.0：`type: 简述`（`scope` 在 CC 里是 OPTIONAL，可省）、
+英文、祈使句、**标题与正文每行 ≤72 字符**。
+
+**提交消息写入仓库外**（`$env:TEMP`），用 `-F` 传入后删除 —— 避免 shell 转义
+出错，且天然不进版本控制：
+
+```powershell
+$msg = Join-Path $env:TEMP "aigc_commit_msg.txt"
+# 1. 把消息写入 $msg（UTF-8）
+git commit -F $msg
+Remove-Item $msg
+```
+
+**禁止在仓库内创建临时文件。** 提交前用 `git status` 核对清单，
+不要用 `git add -A` 盲加。
+
+提交前跑完整回归（见下），确认全绿再提交。
+
 ## 改完必须跑回归
 
 ```powershell
@@ -81,7 +101,7 @@ eng.predict_paragraphs(texts, dev, progress_cb=prog, **params)
 | 文档 | 内容 |
 |---|---|
 | `docs/AUTHOR_STYLE.md` | 原作者风格 13 项实测对照（改动前必读） |
-| `docs/AUDIT_2026-09-22.md` | 19 条 bug 的定位与修复、TODO |
+| `docs/AUDIT.md` | 19 条 bug 的定位与修复、TODO |
 | `docs/PAPER_GAPS.md` | 与所引论文的差异清单 |
 | `docs/DOC_FIXES_PENDING.md` | 原作者文档的待修订清单（暂不改） |
 | `docs/HANDOFF.md` | 交接说明 |

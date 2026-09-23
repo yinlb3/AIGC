@@ -1,17 +1,53 @@
 # AIGC 工具箱 审查记录
 
-- 日期：2026-09-22
+- 日期：2026-09-22 ~ 2026-09-23（首轮审查 09-22，次轮修复与实测 09-23）
 - 审查对象：`d:\Project\AIGC`（v1.2.8）
 - 验证环境：`C:\ProgramData\miniconda3\envs\pytorch\python.exe`
   - Python 3.12.8 / torch 2.8.0+cu129 / CUDA 12.9 可用
   - RTX 4080 SUPER 16GB / transformers 5.17.0 / PySide6 6.9.2
-- 验证方式：10 个探针脚本（见 `tools/audit_probes/`）+ 4 个自带脚本
+- 验证方式：探针脚本（`tools/audit_probes.py`）+ 4 个自带脚本
   - **全程未下载任何模型**，真模型部分用本地随机权重小 GPT-2 构建
-- 复现依据：`tools/audit_probes/` 下的脚本可原样重跑
+- 复现依据：`python tools/audit_probes.py --list` 查看全部探针，可原样重跑
+
+> 2026-09-23 精简：删去「已撤回的判断」「论文核对」「自带测试结果」「修复路径
+> 建议」「待确认事项」「审查阶段写操作清单」六节，以及 15 条内置样本原文 ——
+> 前几节的结论已在 `HANDOFF.md`，后两节属过程数据。本文件只留「做了什么、
+> 结果如何」。论文差异的完整版见 `PAPER_GAPS.md`，标定数据见
+> `docs/calibration.md`。
 
 ---
 
-## 一、确认的问题（12 条）
+## 一、确认的问题（共 19 条）
+
+本节详述**首轮发现的 12 条（BUG-1~12）** —— 含定位、根因与实测。
+**次轮新增的 7 条（BUG-13~19）** 详见 §3.4 的清单与 §3.9/§3.12。
+
+| 编号 | 问题 | 状态 |
+|---|---|---|
+| BUG-1 | Binoculars 恒判 AI（公式/交叉项/阈值三重错） | ✅ 已修 |
+| BUG-2 | `avg_logprob` 分块口径错 | ✅ 已修 |
+| BUG-3 | 设置保存写坏 `hf_endpoint` | ✅ 已修 |
+| BUG-4 | 集群发现被端口绑定竞争掐死 | ✅ 已修 |
+| BUG-5 | detectgpt 缺 σ 归一化 | ✅ 已补（实测相悖，见 §3.9） |
+| BUG-6 | fastdetectgpt 缺 σ 归一化 | ✅ 已补（同上） |
+| BUG-7 | 扰动数 k=5 低于论文的 100 | ⏸️ 未改（慢 10~20 倍） |
+| BUG-8 | 引擎清单参数覆盖用户参数 | ✅ 已修 |
+| BUG-9 | gltr 命名与实现不符 | ⏸️ 设计决策（见 TODO-3） |
+| BUG-10 | license 校验空壳 | ⏸️ 保留原状（原作者决定） |
+| BUG-11 | 报告文件名未转义 | ✅ 已修 |
+| BUG-12 | `smoke_test.py` 路径错，跑不起来 | ✅ 已修 |
+| BUG-13 | 中文超 `n_positions` 时 CUDA 崩溃 | ✅ 已修 |
+| BUG-14 | `curvature_engine.py` 缺 `import math` | ✅ 已修 |
+| BUG-15 | `_mask_perturb` 超 T5 输入上限 | ✅ 已修 |
+| BUG-16 | `avg_logprob` 后死代码残留 | ✅ 已删 |
+| BUG-17 | gltr 阈值只适配英文 | ✅ 已按语言分档 |
+| BUG-18 | gltr 在长文/新闻类上判别力骤降 | ⚠️ 方法局限，未修 |
+| BUG-19 | 显存不足静默降速（fp32 溢出） | ✅ 已修（fp16 + 显存预检） |
+| 新增 | 跨模型 B 值计算 `cross_perplexity` | ✅ 已加 |
+
+**统计：19 条确认，已修 14，未修 5（BUG-7/9/10/18 + BUG-9 属设计决策）。**
+
+---
 
 ### BUG-1【P0】Binoculars 恒判 AI —— 公式 / 交叉项 / 阈值三重错
 
@@ -176,60 +212,7 @@ current_tier() -> 'pro'
   而 `core/` 在 `app/` 下
 ---
 
-## 二、已撤回的判断（5 条）
-
-初版审查有 5 条判断有误，实测后推翻，记录在此避免重复踩坑：
-
-| 原判断 | 实测结果 | 撤回原因 |
-|---|---|---|
-| 降重 `%` 格式化缺参会崩溃 | **未复现**，正常输出 | `%%` 是字面量，4 占位符对 4 实参本就匹配 |
-| `_style_fix` / `_break_parallel` 死循环 | **未复现** | 24 条口语化规则 + 5+3 条模板规则自激 0 条 |
-| i18n 拼接键 `engine_status_*` / `rewrite_sev_*` 缺失 | **未复现** | 词典变量名是 `ZH`/`EN`（各 311 键），全部存在 |
-| 多卡分片漏掉末段 | **未复现** | 3 设备 / 5 段实测覆盖 `[0,1,2,3,4]` 无遗漏无重复 |
-| transformers 5.17 与项目不兼容（4 处 API FAIL） | **误报** | `inspect.signature` 看不到 `**kwargs` 真实形参；真调用证明 `cache_dir` / `local_files_only` / `do_sample` / `top_p` / `temperature` / `max_new_tokens` / `pad_token_id` **全部可用** |
-
-**组件兼容性结论：transformers 5.17.0 + torch 2.8.0+cu129 +
-huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
-
----
-
-## 三、论文核对（5 篇）
-
-| 引擎 | arXiv | 论文公式 | 项目实现 | 偏差判定 |
-|---|---|---|---|---|
-| binoculars | 2401.12070 | `logPPL / logxPPL` | `(-lp_obs) / exp(-lp_perf)` | 形态错 + 缺交叉项 + 阈值跨模型误用 |
-| detectgpt | 2301.11305 | `(logp(x) − μ̃) / √σ̃` | `base − mean_pert` | 缺 σ 归一化，阈值 0.0 无依据 |
-| fastdetectgpt | 2310.05130 | `(logp(x\|x) − μ̃) / σ̃` | `base − mean_pert` | 缺 σ 归一化 + 采样非条件独立 |
-| gltr | 1906.04043 | rank 四桶 + 熵 | 整段平均 PPL 线性映射 | 核心 Test-2 未实现 |
-| perplexity | 无（朴素基线） | — | PPL → [0.15, 0.85] 线性 | 受 BUG-2 污染 |
-
-### 三篇检测引擎的共同病根：σ 归一化集体缺失
-
-`detectgpt` 与 `fastdetectgpt` 都丢掉了论文的方差归一化项
-（前者 `/√σ̃`，后者 `/σ̃`）。两篇论文都专门论证过 σ 的作用：
-
-- DetectGPT §5.3：靠归一化才能让阈值「separates human and model texts
-  **across data distributions**」
-- Fast-DetectGPT §3.2：消融实验「the normalization enhances ...」
-
-去掉 σ 后，判别分数的**绝对尺度**随文本长度、领域、模型而变，
-两篇论文抄来的阈值（0.1 / 0.0）就失去意义。
-
-### 阈值全部不可移植
-
-论文三个阈值都绑定各自的模型组合：
-
-| 引擎 | 论文阈值 | 论文模型组合 | 项目模型组合 |
-|---|---|---|---|
-| binoculars | 0.901 | Falcon-7B-Instruct + Falcon-7B | gpt2 + gpt2-medium |
-| detectgpt | ~0.1 | GPT-2/GPT-J + T5-3B | gpt2 + t5-base |
-| fastdetectgpt | 按 AUROC 不固定 | 各源模型 + Neo-2.7 | gpt-neo-2.7B |
-
-**结论：修完公式后必须重新标定阈值**，不能继续沿用论文数值。
-
----
-
-## 四、静态扫描结果
+## 二、静态扫描结果
 
 - **未使用导入 14 处**：`logging_setup.py:6(sys)`、`benchmark_dialog.py:11(Qt)`、
   `engine_dialog.py:18(QFileDialog)`、`main_window.py:5(QTimer)`、
@@ -240,95 +223,23 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
   `benchmark.py`(35)、`main_window.py`(26)、`aigc_rules.py`(24)、
   `installer.py`(23)、`glass.py`(21)、`rewrite_dialog.py`(21)
 - **静默 except 31 处**，密集在 `cluster.py`（14 处）、`installer.py`（6 处）
-- **`predict_paragraphs` 参数语义错位**：`benchmark_dialog.py:212` 传
-  `cfg["params"]`，但 `aigc_reduce` / `cnki_skill` 的 `params` 都是 `{}`；
-  而 `CnkiDiagnoseEngine` 期待 `probs`/`threshold`、
-  `RuleRewriteEngine` 期待 `options` —— 实测不报错但**评测结果无意义**
-  （返回恒定 `[0.1]` / `[0.0]`）
+- ~~**`predict_paragraphs` 参数语义错位**：`benchmark_dialog.py:212` 传
+  `cfg["params"]`，但 `aigc_reduce` / `cnki_skill` 的 `params` 都是 `{}`~~
+  → ✅ **2026-09-23 核实为误报**：`benchmark_dialog.py:108` 用的是
+  `mgr.runnable()`，而 `manager.runnable()` 按 `category == CAT_DETECT`
+  过滤（无引擎显式设 `runnable` 字段），**只返回 5 个检测引擎**；
+  `aigc_reduce` / `cnki_skill` 是 `repair` 类，**根本不会出现在评测列表**。
+  实测 `mgr.runnable()` 返回：binoculars / detectgpt / fastdetectgpt /
+  gltr / simpleai —— 这 5 个的 `params` 都有值。
+  **原判断错在假定"评测界面能选到修复类引擎"，未验证过滤逻辑。**
 
 ---
 
-## 五、项目自带测试的执行结果
-
-| 脚本 | 结果 | 备注 |
-|---|---|---|
-| `tools/smoke_test.py` | **10/10 通过** | 需先设 `PYTHONPATH=app`，否则 0/10（见 BUG-12） |
-| `tools/test_engines.py` | **13/13 通过** | 直接用即可 |
-| `tools/test_detect.py` | **ALL PASS** | 直接用即可 |
-| `tools/fusion_selftest.py` | **全部通过** | 直接用即可 |
-
-**注意**：这 4 个脚本全过，但**没有测出上面 12 条 bug 中的任何一条** ——
-它们只覆盖框架结构、清单完整性、指标计算，不校验算法正确性。
-说明现有测试的**覆盖深度不足**，无法作为发布前的回归网。
-
 ---
 
-## 六、修复路径建议
+## 三、修复执行记录
 
-关键点：**BUG-2 是所有检测引擎的公共前提，必须最先修。**
-
-```
-第 1 步  BUG-2  base.avg_logprob 分块权重 -> (end - begin - 1)
-         影响 gltr / detectgpt / fastdetectgpt / binoculars 四个引擎
-第 2 步  BUG-1  binoculars 重写内核
-         需实现式 (3) 的逐 token 交叉熵点积（要取两模型 logits，不只取 loss）
-第 3 步  BUG-5/6  给两个曲率引擎补 σ 归一化
-第 4 步  阈值重标定
-         论文阈值全部不可移植；用 core/benchmark.py 的带标注样本
-         扫出 FPR=1% 的分位点，分别为 gpt2 / gpt-neo-2.7B /
-         gpt2+gpt2-medium 三个组合标定
-第 5 步  BUG-3/4/8  界面与集群修复
-第 6 步  BUG-9~12   命名、license、转义、测试脚本
-```
-
-**第 4 步不可省**：三个引擎的论文阈值都绑定各自的模型组合，
-项目换了模型后任何抄来的阈值都不成立。
-
----
-
-## 七、待确认事项
-
-1. **license 是否只是演示占位？** 若是，BUG-10 降级为「设计如此」；
-   若 pro 有实质功能拦截，需按 P0 处理
-2. **gltr 的定位**：改名（如「困惑度 PPL 检测」）还是真正实现 Test-2 的
-   rank 四桶？前者成本低，后者才能对得起 `arXiv:1906.04043` 的引用
-3. **是否需要先做阈值标定实验**（用 `core/benchmark.py` 跑当前各引擎在
-   内置样本上的实际 FPR/FNR，作为修前基线）—— 建议做，
-   否则修完无法量化验证改善程度
-4. **binoculars 的模型组合**：是否愿意为了对齐论文改用 Falcon-7B 系列
-   （约 15GB；当前 gpt2 组合仅 1.9GB）
-
----
-
-## 八、本次审查的写操作清单
-
-| 路径 | 内容 | 在项目内 |
-|---|---|---|
-| `d:\Project\AIGC\tools\audit_probes\` | 10 个探针脚本 + README.md | 是（新增） |
-| `d:\Project\AIGC\docs\AUDIT_2026-09-22.md` | 本文件 | 是（新增） |
-| `d:\Project\AIGC\app\logs\app.log` | 193 字节启动日志（`MainWindow()` 构造时自动生成） | 是（已存在目录） |
-| `%TEMP%\aigc_*` | 探针的临时文件，已自行清理 | 否 |
-
-**项目源码零改动**，未提交任何内容。
-
-**未执行的脚本**（说明理由，避免误解为遗漏）：
-
-- `tools/patch_offline_fix.py` —— 会改写 `app/main.py`、引擎文件与
-  `settings.json`，破坏性修改，不在审查阶段运行
-- `tools/grab_screen.py` —— 截图工具，无验证价值，且默认路径写死
-- `tools/download_simpleai_model.py` —— 第 9 行写死
-  `C:\Users\hkjg2\Documents\...`（前开发者机器遗留），本机必失败
-- `tools/run_detection_test.bat` —— 指向 `D:\Dev\AIGC_Detector\.venv`
-  与 `C:\Users\hkjg2\...`，**路径全部失效**，且引用了不在仓库里的
-  `test_detection.py`
-- `installer/installer.py`、`app/first_run.py` —— 会装 Python 运行时、
-  改注册表、建桌面快捷方式，破坏性操作
-
----
-
-## 九、修复执行记录（2026-09-22）
-
-### 9.1 修复前后对比（同一批 15 条内置样本，阈值 0.50）
+### 3.1 修复前后对比（同一批 15 条内置样本，阈值 0.50）
 
 | 引擎 | 指标 | 修前 | 修后 | 变化 |
 |---|---|---|---|---|
@@ -345,7 +256,62 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
   修正，PPL 值现在准确，为换用 Test-2 铺好了路。
 - `simpleai` 不依赖 `avg_logprob`（走序列分类），指标不变，符合预期。
 
-### 9.2 BUG-1 修复实证：B 值恢复到论文量级
+**修前全体指标（4 个引擎同批样本并列）：**
+
+| 指标 | simpleai | gltr | binoculars | detectgpt |
+|---|---|---|---|---|
+| 样本数 | 15 | 15 | 15 | 15 |
+| 准确率 | 60.0% | 60.0% | 53.3% | **33.3%** |
+| 假阳性率 FPR | 37.5% | 0.0% | 0.0% | **100.0%** |
+| 假阴性率 FNR | 42.9% | **85.7%** | **100.0%** | 28.6% |
+| 精确率 | 57.1% | 100.0% | 0.0% | 38.5% |
+| 召回率 | 57.1% | 14.3% | 0.0% | 71.4% |
+| F1 | 0.571 | 0.250 | 0.000 | 0.500 |
+| 耗时 | 7.6 秒 | 8.1 秒 | 14.2 秒 | 227.1 秒 |
+
+**按语言看 FPR（关键）**：
+
+| 语言 | simpleai | gltr | binoculars | detectgpt |
+|---|---|---|---|---|
+| en | **100.0%** | 0.0% | 0.0% | **100.0%** |
+| zh | 0.0% | 0.0% | 0.0% | **100.0%** |
+
+simpleai 是中文模型，**在英文上 FPR 100%**（人写的英文全判 AI）；
+detectgpt 修前则中英都 FPR 100%。
+
+**修前逐条概率（同一行并列 4 个引擎）：**
+
+| # | 真值 | 来源 | simpleai | gltr | binoculars | detectgpt |
+|---|---|---|---|---|---|---|
+| 1 | 人写 | human | 0.00 | 0.15 | 0.11 | 0.97 ❌ |
+| 2 | 人写 | human | 0.00 | 0.15 | 0.12 | 0.97 ❌ |
+| 3 | 人写 | human | 0.00 | 0.15 | 0.08 | 0.72 ❌ |
+| 4 | 人写 | human | 0.00 | 0.15 | 0.11 | 0.97 ❌ |
+| 5 | 人写 | human | 0.00 | 0.15 | 0.07 | 0.71 ❌ |
+| 6 | 人写 | human | 1.00 ❌ | 0.15 | 0.04 | 0.61 ❌ |
+| 7 | 人写 | human | 1.00 ❌ | 0.15 | 0.05 | 0.62 ❌ |
+| 8 | 人写 | human | 1.00 ❌ | 0.15 | 0.08 | 0.65 ❌ |
+| 9 | AI | gpt-4 | 1.00 ✅ | 0.41 ❌ | 0.12 ❌ | 0.52 ✅ |
+| 10 | AI | gpt-4 | 0.00 ❌ | 0.47 ❌ | 0.14 ❌ | 0.43 ❌ |
+| 11 | AI | claude | 0.00 ❌ | 0.41 ❌ | 0.16 ❌ | 0.45 ❌ |
+| 12 | AI | gpt-3.5 | 0.00 ❌ | 0.29 ❌ | 0.11 ❌ | 0.54 ✅ |
+| 13 | AI | gpt-4 | 1.00 ✅ | 0.37 ❌ | 0.16 ❌ | 0.65 ✅ |
+| 14 | AI | claude | 1.00 ✅ | 0.27 ❌ | 0.17 ❌ | 0.67 ✅ |
+| 15 | AI | gpt-3.5 | 1.00 ✅ | 0.85 ✅ | 0.23 ❌ | 0.68 ✅ |
+
+❌ = 判错。第 6~8 条是人写的**英文**文本；第 9~12 条是 AI 写的**中文**文本
+（第 13~15 条为 AI 写的英文）。
+
+**观察**：
+- simpleai 的错判**完美按语言划分**：中文对、英文全错（第 6~8 条英文人写 → 全判 AI）
+- gltr 修前几乎全判"人写"（只有第 15 条抓对）
+- binoculars 全判"人写"（概率集中在 0.04~0.23）
+- detectgpt 全判"AI"（人写 0.61~0.97），中英皆错
+
+**内置样本 15 条**：作者手写的快速自检集（**非官方基准**），内容见本节上方逐条表。
+要看真实水平，请从 RAID / MGTBench 官方仓库下载数据子集后通过「导入样本」评测。
+
+### 3.2 BUG-1 修复实证：B 值恢复到论文量级
 
 修后逐条 logPPL / log-xPPL / B（前 6 条）：
 
@@ -362,7 +328,7 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 
 修前 B 落在 **0.004~0.33**（量纲错），修后落在 **0.85~1.00** —— 同一量级。
 
-### 9.3 BUG-2 最终修法（推翻了三版中间方案）
+### 3.3 BUG-2 最终修法（推翻了三版中间方案）
 
 原实现按 `chunk` 分块逐段前向再按块长加权。三种修补方案均失败：
 
@@ -387,7 +353,9 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 **最终实现**：整段一次前向 + 手取 `logits` 算 NLL，用 `max_tokens` 控制长度
 上限（与论文一致）。`chunk` 参数保留仅为向后兼容。
 
-### 9.4 已修复清单
+### 3.4 已修复清单
+
+**首轮 12 条**（BUG-7 见 §3.7 下方说明）：
 
 | 编号 | 问题 | 文件 | 状态 |
 |---|---|---|---|
@@ -395,16 +363,32 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 | BUG-2 | `avg_logprob` 分块不可行 | `base.py` | ✅（改整段） |
 | BUG-3 | `hf_endpoint` 写成裸域名 | `settings_dialog.py:174-180` | ✅ |
 | BUG-4 | 集群端口绑定竞争 | `cluster.py:59-82` | ✅（实测 4 秒发现） |
-| BUG-5 | detectgpt 缺 `/√σ̃` | `curvature_engine.py` | ✅ |
-| BUG-6 | fastdetectgpt 缺 `/σ̃` | `curvature_engine.py` | ✅ |
+| BUG-5 | detectgpt 缺 `/√σ̃` | `curvature_engine.py` | ✅（补上，但小采样下反而有害，见 2.5 节） |
+| BUG-6 | fastdetectgpt 缺 `/σ̃` | `curvature_engine.py` | ✅（同上） |
+| BUG-7 | 扰动数 k=5 远低于论文（100） | `catalog.py` | ⏸️ 未改（慢 10~20 倍，见 `HANDOFF.md` §3） |
 | BUG-8 | 参数覆盖顺序反了 | `main_window.py:86-89` | ✅ |
+| BUG-9 | gltr 命名与实现不符 | — | ⏸️ 见 TODO-3 |
+| BUG-10 | license 校验空壳 | — | ⏸️ 保留原状（原作者决定） |
 | BUG-11 | 报告文件名未转义 | `report.py:20` | ✅ |
 | BUG-12 | `smoke_test.py` 路径错 | `tools/smoke_test.py:5` | ✅（10/10） |
 | 新增 | 跨模型 B 值计算 `cross_perplexity` | `base.py` | ✅ |
-| BUG-10 | license 占位 | — | ⏸️ 按既定协议保留 |
-| BUG-9 | gltr 命名与实现不符 | — | ⏸️ 见 TODO-3 |
 
-### 9.5 回归验证
+**次轮新增 7 条**（BUG-13~19，详见 §3.9 / §3.12）：
+
+| 编号 | 问题 | 文件 | 状态 |
+|---|---|---|---|
+| BUG-13 | 中文超 `n_positions` 时 CUDA 崩溃 | `base.py` | ✅ `_encode_capped()` |
+| BUG-14 | 缺 `import math` | `curvature_engine.py` | ✅ |
+| BUG-15 | `_mask_perturb` 超 T5 输入上限 | `curvature_engine.py` | ✅ |
+| BUG-16 | `avg_logprob` 后死代码残留 | `base.py` | ✅ 已删 |
+| BUG-17 | gltr 阈值只适配英文 | `perplexity_engine.py` | ✅ 按语言分档 |
+| BUG-18 | gltr 在长文/新闻类上判别力骤降 | 同 BUG-17 | ⚠️ 方法局限，未修 |
+| BUG-19 | 显存不足时静默降速（fp32 溢出） | `base.py` | ✅ fp16 加载 + 显存预检 |
+
+**统计：19 条确认（BUG-1~19），已修 14 条，未修 5 条**（BUG-7/9/10/18 见上表；
+BUG-9 与 BUG-10 属设计决策，非缺陷）。
+
+### 3.5 第一轮回归验证
 
 | 测试 | 结果 |
 |---|---|
@@ -416,7 +400,7 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 | 集群发现实测 | 4 秒发现节点（修前恒为空） |
 | `avg_logprob` 分块一致性 | 偏差 0.000%（修前 34~67%） |
 
-### 9.6 已删除文件（历史残留）
+### 3.6 已删除文件（历史残留）
 
 | 文件 | 原功能 | 删除原因 |
 |---|---|---|
@@ -429,28 +413,20 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 
 ---
 
-## 九、修复执行记录（2026-09-22 / 23）
+### 3.7 修复后各引擎实测
 
-### 9.1 修复后各引擎实测（标定数据，1:1 平衡样本）
+**数据见 `docs/calibration.md` 一、二章**（中英两套标定，含逐引擎
+明细、PPL 分布、σ 实测、三套混合）。此处只留结论：
 
-**中文场景**（HC3-Chinese，400 条）
+| 引擎 | 中文（HC3 400 条） | 英文（Ghostbuster 300 条） |
+|---|---|---|
+| simpleai | **99.75%**（FPR 0.50%） | 英文不可用（FPR 100%） |
+| gltr | 77.50% | **93.67%**（essay） |
+| binoculars | 71.50% | **94.17%**（FPR 4.84%） |
+| detectgpt | 未测 | 90.00% |
+| fastdetectgpt | 未完成 | 未标定 |
 
-| 引擎 | AI 中位 | human 中位 | 阈值 0.50 | 最优阈值 | 最优准确率 |
-|---|---|---|---|---|---|
-| **simpleai** | 0.9999 | 0.0000 | **99.25%** | 0.93 | **99.75%**（FPR 0.50%） |
-| gltr | 0.8029 | 0.2511 | 77.50% | 0.50 | **77.50%**（FPR 27.6%） |
-| binoculars | 0.1694 | 0.1261 | 49.75% | 0.149 | 71.50% |
-
-**英文场景**（Ghostbuster，300 条）
-
-| 引擎 | 阈值 0.50 | 最优阈值 | 最优准确率 |
-|---|---|---|---|
-| **binoculars** | 60.3% | 0.615 | **94.17%**（FPR 4.84%） |
-| **detectgpt**（未归一化） | — | 1.1872 | **90.00%**（FPR 10%） |
-| gltr（essay 子集） | **93.67%** | — | 93.67%（FPR 5.19%） |
-| gltr（essay+reuter+wp） | 52.33% | 0.315 | 54.00% |
-
-### 9.2 关键结论：不是模型大小的问题
+### 3.8 关键结论：不是模型大小的问题
 
 **证据链：**
 
@@ -468,7 +444,7 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 3. **模型语言与文本匹配**（中文文本必须用中文模型）
 4. 模型规模（有影响，但不是决定性 —— 0.1B 的 simpleai 拿到 99.75%）
 
-### 9.3 本轮新增修复
+### 3.9 本轮新增修复
 
 | 项 | 文件 | 说明 |
 |---|---|---|
@@ -480,7 +456,19 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 | 界面语言标注 | `engine_dialog.py`、`main_window.py`、`catalog.py` | 引擎名加「🌐 中文 / 🌐 英文」前缀，避免用户拿英文引擎测中文 |
 | 描述校准 | `catalog.py` | binoculars 的 `desc` 去掉"不用调阈值就跨领域通用"（实测不成立）；gltr 补实测准确率 |
 
-### 9.4 回归验证
+**对应 BUG 编号**（次轮新增，详见 `HANDOFF.md` §2 缺陷表）：
+
+| 编号 | 问题 | 位置 |
+|---|---|---|
+| BUG-13 | 文本超模型 `n_positions` 时 CUDA 崩溃（中文必现） | `base.py` |
+| BUG-14 | 缺 `import math` | `curvature_engine.py` |
+| BUG-15 | `_mask_perturb` 拼接后超 T5 输入上限 | `curvature_engine.py` |
+| BUG-16 | `avg_logprob` 后有死代码残留 | `base.py` |
+| BUG-17 | gltr 的 `ppl_low/ppl_high` 只适配英文 | `perplexity_engine.py` |
+| BUG-18 | gltr 在长文/新闻类数据上判别力骤降 | ⚠️ 方法局限，未修 |
+| BUG-19 | 显存不足时静默降速（fp32 溢出） | `base.py`（见 §3.12） |
+
+### 3.10 第二轮回归验证
 
 | 测试 | 结果 |
 |---|---|
@@ -493,18 +481,7 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 | `avg_logprob` 分块一致性 | 偏差 0.000%（修前 34~67%） |
 | 离屏主窗口 | 下拉 5 项均带语言标注 |
 
-### 9.5 新发现的问题（本轮）
-
-| 编号 | 问题 | 位置 | 状态 |
-|---|---|---|---|
-| BUG-13 | 文本超模型 `n_positions` 时 CUDA 崩溃（中文必现） | `base.py` | ✅ 已修 |
-| BUG-14 | `curvature_engine.py` 缺 `import math` | `curvature_engine.py` | ✅ 已修 |
-| BUG-15 | `_mask_perturb` 拼接后超 T5 输入上限 | `curvature_engine.py` | ✅ 已修 |
-| BUG-16 | `avg_logprob` 后有死代码残留 | `base.py` | ✅ 已删 |
-| BUG-17 | gltr 的 `ppl_low/ppl_high` 只适配英文 | `perplexity_engine.py` | ✅ 已按语言分档 |
-| BUG-18 | gltr 在长文/新闻类数据上判别力骤降 | 同 BUG-17 | ⚠️ 已记录，属方法本身局限 |
-
-### 9.6 新增 BUG-19：显存不足时静默降速（无报错）
+### 3.12 BUG-19：显存不足时静默降速（无报错）
 
 **现象**：`base.py` 加载模型时不指定 `torch_dtype`，默认 **fp32**。
 对 `gpt-neo-2.7B`（fastdetectgpt）权重就要 10.8GB，加激活值会突破 16GB 显存。
@@ -524,18 +501,12 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 | **功耗** | **117 W** | 280~320 W | **没在算** |
 | 耗时 | **4.1 小时未完成** | — | |
 
-**修复**：
+**修复**：`base.py` 新增 `_pick_dtype()`（CUDA 时自动用 fp16）+
+`_check_vram()`（可用显存低于 2GB 时明确报错）。
+**实测效果**：显存 15.5GB（溢出）→ 5.46GB；单条从"不可测"→ 13.6 秒。
 
-1. `base.py` 新增 `_pick_dtype()` —— CUDA 时自动用 **fp16**
-2. `base.py` 新增 `_check_vram()` —— 可用显存低于 2GB 时**明确报错**
-
-**修复效果**：
-
-| 指标 | fp32 | **fp16** |
-|---|---|---|
-| 显存占用 | 15.5 GB（溢出） | **5.46 GB** |
-| 单条耗时 | 不可测 | **13.6 秒** |
-| 推算 200 条 | >10 小时 | **45 分钟** |
+**fp16 对照复测见 `HANDOFF.md` §5.9**（fp32 溢出 +2163MB / fp16 不溢出；
+两处显存不足形态的区分；fp16 对判定结论无影响，Kendall 1.0000）。
 
 **用户影响**：修前，8GB / 12GB 显卡跑 fastdetectgpt **不会看到任何错误**，
 只会觉得"软件卡死了"。这属于**体验级严重问题**。
@@ -543,11 +514,9 @@ huggingface_hub 1.32.0 与项目代码完全兼容，无需降级。**
 **诊断要点**：判断 GPU 是否真在计算，**看温度和功耗，不要只看利用率**
 —— 利用率在等待 PCIe 传输时也会显示很高。
 
-
-
 ---
 
-## 十、待办（TODO）
+## 四、待办（TODO）
 
 ### TODO-1：GLTR 论文原样显示（优先级：中）
 
@@ -702,39 +671,141 @@ Ghostbuster 三套（News / Creative Writing / Student Essay）+ HC3-Chinese。
 需下载 `EleutherAI/gpt-neo-2.7B`（约 5.4GB）才能跑该引擎的基线。该引擎的
 σ 归一化已修（BUG-6），但修后效果未实测。
 
-### TODO-6：工程清理（优先级：低）
+**2026-09-23 更新**：模型已下载（10.0GB fp32 / fp16 加载 5.33GB），但仍**未标定**：
+跑它需可用显存 ≥7GB，本机常被其他进程占 7.8GB，余量不足会**慢 10 倍**
+（实测 139.9 秒/条 vs 干净环境 13.6 秒）。需先腾显存。
+
+### TODO-6：工程清理（优先级：低，**按判据不修**）
 
 - 未使用导入 14 处
 - 静默 except 31 处（`cluster.py` 14 处、`installer.py` 6 处）
 - 行长超 80 字符 378 处 / 38 文件
 
+**这三项均不影响用户使用效果** —— 按 `AGENTS.md` 的判据「影响就修，不影响就不动」，
+**当前不修**。记录在此仅为留档（原作者有意不限行长，见 `AUTHOR_STYLE.md`）。
+
+### TODO-7：探针 `cluster_port` 拆分（✅ 已完成 2026-09-23）
+
+**原问题**：`tools/probes/cluster.py` 的 `run_cluster_port_and_chunk()` 把两件
+无关的事装在一个探针里：
+
+| 部分 | 验证对象 | 需要什么 |
+|---|---|---|
+| 2.4 | 集群端口绑定竞争 | 真起 socket，占端口 5 秒 |
+| 2.5 | `avg_logprob` 分块口径 | **纯 `torch.arange` + 桩模型，零副作用** |
+
+**后果**：想看 2.5（分块口径）必须连带占用 UDP 47650 五秒，所以整条被归进
+`heavy` 组。而 2.5 本身属 `safe`。
+
+**已改为两个探针**：
+
+| 探针 | 函数 | 组 | 副作用 |
+|---|---|---|---|
+| `cluster_port` | `cluster:run_cluster_port` | heavy | 占 UDP 47650 约 5 秒 |
+| `logprob_chunk` | `cluster:run_logprob_chunk` | **safe** | **无**（纯计算） |
+
+**验证**：`--only logprob_chunk` 与 `--only cluster_port` 均独立跑通，
+结论与原脚本一致。
+
 ---
 
-## 十一、本次修复的写操作清单
+### TODO-8：中文可用性（优先级：**高**，由 2026-09-23 AUC 实测新增）
+
+**背景**：AUC 实测（见 `HANDOFF.md` §5.10）证明 **5 个引擎里只有 simpleai
+在中文上可交付**：
+
+| 引擎 | 中文 AUC | 判定 |
+|---|---|---|
+| simpleai | **0.9998** | ✅ 可交付 |
+| gltr | 0.7816 | ⚠️ 弱 |
+| binoculars | 0.7728 | ⚠️ 弱 |
+| detectgpt | **0.2800** | ❌ **反向不可用**（低于随机） |
+| fastdetectgpt | 未测 | ❓ 未标定 |
+
+**根因**：4 个引擎用的是**英文模型**（gpt2 / gpt2-medium / t5-base /
+gpt-neo-2.7B），**方法本身与语言无关，是模型选择问题**。
+
+**三个方案（工作量递增）：**
+
+| 方案 | 做法 | 工作量 | 涉及文件 | 预期收益 |
+|---|---|---|---|---|
+| **A** | 新增独立引擎 `zh_perplexity`（**原作者方案**，`engines_manifest.json` 已有条目 + 阈值 20/45） | **30 分钟** | `catalog.py` 加 1 条 | 中文多一个可用选项（约 0.63 acc） |
+| **B** | 改 gltr 按语言自动切模型（`_is_chinese()` 已有雏形） | **2 小时** | `perplexity_engine.py` + `catalog.py` | 用户无感，但提升有限 |
+| **C** | 4 个引擎全换中文模型 | **1~2 天** | 6+ 文件 | 4 个都改善，**但仍都差于 simpleai** |
+
+**方案 C 的卡点：**
+
+| 引擎 | 换什么 | 难度 | 卡点 |
+|---|---|---|---|
+| gltr | 中文 GPT-2 | ⭐ | 无 |
+| binoculars | **2 个同词表中文模型** | ⭐⭐⭐ | 中文 GPT-2 家族配对少（论文要求同词表） |
+| detectgpt | 中文 GPT-2 + **中文 T5** | ⭐⭐⭐ | **中文 T5 生态弱** |
+| fastdetectgpt | 中文大模型 | ⭐⭐⭐⭐ | **无现成等价物**（gpt-neo-2.7B 的中文对应） |
+
+**已验证的效果**（待办 3 实测）：
+
+```
+gpt2（现用）      分词 431 token   FPR≤5% acc 0.4950（无用）
+gpt2-chinese      分词 205 token   FPR≤5% acc 0.6300   ← +13.5，有效
+```
+
+**但即使全做完，都追不上 simpleai 的 0.9998** —— 因为 simpleai 是
+**专门为中文训练的判别模型（有监督）**，而换底座后仍是**无监督统计**，
+方法上就差一档。
+
+**建议**：做 **A**（30 分钟，原作者已备好方案），**B/C 按需**。
+**更该先做方案 D（见 TODO-9）** —— 让用户知道中文该用哪个。
+
+### TODO-9：引擎的中文可用性标注（✅ 已完成 2026-09-23）
+
+**原问题**：用户拿中文学术论文选 binoculars / detectgpt，会得到
+**完全错误的结果**（detectgpt 甚至是反向的），而界面**没有任何提示**。
+
+**已实现**：扩 `engine_lang_mark()`（`app/ui/engine_dialog.py`），
+识别 `tags` 里的可用性标记并输出后缀：
+
+| 引擎 | 界面显示 | 中文 AUC |
+|---|---|---|
+| SimpleAI | `🌐 中文 ✅ 可用` | 0.9998 |
+| GLTR | `🌐 中文 / 英文 ⚠️ 中文弱` | 0.7816 |
+| Binoculars | `🌐 中文 / 英文 ⚠️ 中文弱` | 0.7728 |
+| DetectGPT | `🌐 中文 / 英文 ❌ 中文勿用` | 0.2800（反向） |
+| Fast-DetectGPT | `🌐 中文 / 英文 ❌ 中文勿用` | 未测 |
+
+**改的两个文件**：
+- `app/core/engines/catalog.py` —— 5 个引擎的 `tags` 各加 1 个可用性标记
+- `app/ui/engine_dialog.py` —— 新增 `_USABILITY_TAG` 映射，`engine_lang_mark()` 输出后缀
+
+**验证**：`engine_lang_mark()` 对 5 个引擎都返回正确后缀；
+回归 `smoke_test.py` 10/10、`test_engines.py` 13/13、`test_detect.py` ALL PASS。
+
+**注意**：`catalog.py` 的 `desc` 属**代码内文案**（非原作者文档），
+但本次**未改 desc**，只加 `tags` —— 因为 desc 的改动面更大，
+留给原作者决定是否在描述里明说。
+
+## 五、修复阶段的写操作清单（代码改动）
 
 | 路径 | 操作 | 说明 |
 |---|---|---|
-| `app/core/engines/base.py` | 修改 | `avg_logprob` 改整段；新增 `cross_perplexity` |
+| `app/core/engines/base.py` | 修改 | `avg_logprob` 改整段；新增 `cross_perplexity`；fp16 加载 + 显存预检 |
 | `app/core/engines/binoculars_engine.py` | 修改 | 公式按论文式 (3)(4) |
-| `app/core/engines/curvature_engine.py` | 修改 | 两处补 σ 归一化 |
+| `app/core/engines/curvature_engine.py` | 修改 | 两处补 σ 归一化；T5 输入两侧截断；补 `import math` |
 | `app/ui/settings_dialog.py` | 修改 | `hf_endpoint` 写 url |
 | `app/core/cluster.py` | 修改 | master 绑随机端口 |
-| `app/ui/main_window.py` | 修改 | 参数合并顺序 |
+| `app/ui/main_window.py` | 修改 | 参数合并顺序；引擎下拉用带语言标注的名称 |
 | `app/core/report.py` | 修改 | 文件名转义 |
-| `app/core/engines/perplexity_engine.py` | 修改 | 按语言分档阈值；新增 `gltr_buckets()`（Test-2） |
+| `app/core/engines/perplexity_engine.py` | 修改 | 按语言分档阈值 |
 | `app/core/engines/catalog.py` | 修改 | 阈值改为实测标定值；补语言标签；描述校准 |
 | `app/ui/engine_dialog.py` | 修改 | 新增 `engine_lang_mark()`，引擎名带语言前缀 |
-| `app/ui/main_window.py` | 修改 | 参数合并顺序；引擎下拉用带语言标注的名称 |
 | `tools/smoke_test.py` | 修改 | sys.path 指向 app |
 | `settings.json` | 新建 | 模型缓存外置到 `D:\hf_cache\aigc_models` |
-| `docs/baseline/` | 新建 | 4 个引擎的评测报告 |
-| `docs/calibration/` | 新建 | 标定数据与结果（binoculars/detectgpt/gltr/ppl/zh 等） |
-| `docs/AUDIT_2026-09-22.md` | 新建 | 本文件 |
-| `tools/audit_probes/` | 新建 | 10 个探针脚本 + README |
+| `docs/AUDIT.md` | 新建 | 本文件 |
+| `docs/calibration.md` | 新建 | 标定数据 + 风格核查（23 个文件多轮合并为 1 个） |
+| `tools/audit_probes.py` + `tools/probes/` | 新建 | 探针主程序 + 5 个模块（13 个探针，原 15 个独立脚本） |
 | `tools/download_simpleai_model.py` 等 4 个 | **删除** | 移入回收站 |
 
 **模型缓存**（项目外，未进 git）：`D:\hf_cache\aigc_models\` —— simpleai
-781MB、gltr 525MB、binoculars 1978MB、detectgpt 1378MB，合计约 4.6GB。
+781MB、gltr 525MB、binoculars 1978MB、detectgpt 1378MB、fastdetectgpt 10239MB。
 
 **上传前需清理**：`app/logs/app.log`（193 字节启动日志，程序自动生成）。
 

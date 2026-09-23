@@ -58,25 +58,49 @@ def _pick_lang(zh, en):
 # 判据取条目 tags 里的「中文 / 英文」。
 _LANG_MARK = {"zh": "🌐 中文", "en": "🌐 英文"}
 
+# 中文可用性标记（2026-09-23 由 AUC 实测新增，见 docs/HANDOFF.md §5.10）
+#
+# 实测中文 AUC：simpleai 0.9998 / gltr 0.7816 / binoculars 0.7728 /
+#               detectgpt 0.2800（**低于随机，排序反向**）
+#
+# 为什么要标：4 个引擎用英文模型处理中文，其中 detectgpt 的判定方向是反的
+# —— 用户拿中文学术论文选它会得到**完全相反**的结果，而原界面无任何提示。
+_USABILITY_TAG = {
+    "中文可用": "✅ 可用",
+    "中文弱": "⚠️ 中文弱",
+    "中文不可用": "❌ 中文勿用",
+}
+
 
 def engine_lang_mark(engine):
-    """返回「🌐 中文」/「🌐 英文」/「🌐 中英」/空串。
+    """返回语言标记，含**中文可用性**（2026-09-23 起）。
 
-    实测依据（docs/calibration/）：
-        simpleai   中文 99.75% / 英文不可用
-        gltr       中文 74.7%  / 英文 93.67%
-        binoculars 中文 71.5%  / 英文 94.17%
-        detectgpt  中文未测    / 英文 90%
-        fastdetectgpt 待测
+    格式：``🌐 中文`` / ``🌐 英文`` / ``🌐 双语`` + 可用性后缀
+    例：``🌐 双语 ⚠️ 中文弱``、``🌐 英文 ❌ 中文勿用``
+
+    实测依据（docs/HANDOFF.md §5.10，中文 AUC）：
+        simpleai      0.9998  ✅ 可交付
+        gltr          0.7816  ⚠️ 弱
+        binoculars    0.7728  ⚠️ 弱
+        detectgpt     0.2800  ❌ 反向（低于随机）
+        fastdetectgpt 未测
     """
     tags = engine.get("tags") or []
     has_zh = any("中文" in str(t) for t in tags)
     has_en = any("英文" in str(t) for t in tags)
     if has_zh and has_en:
-        return "%s / 英文" % _LANG_MARK["zh"]
+        base = "%s / 英文" % _LANG_MARK["zh"]
+    elif has_zh:
+        base = _LANG_MARK["zh"]
+    else:
+        base = _LANG_MARK["en"]
+
+    # 可用性后缀（只对涉及中文的引擎有意义）
     if has_zh:
-        return _LANG_MARK["zh"]
-    return _LANG_MARK["en"]
+        for tag, mark in _USABILITY_TAG.items():
+            if any(str(t) == tag for t in tags):
+                return "%s %s" % (base, mark)
+    return base
 
 
 def engine_label(engine):

@@ -126,8 +126,101 @@ class BaseEngine:
             pass
         return None
 
+    def _weight_gb(self, repo):
+        """从引擎清单的 ``size`` 字段取该模型的实际占用（GB，fp16）。
+
+        清单里的 ``size`` 是**模型卡上标注的加载大小**，不是下载体积 ——
+        实测验证：fastdetectgpt 清单写 ``"约 5.4GB"``，fp16 加载后实测
+        **5.33GB**（而磁盘上的 fp32 safetensors 是 10.0GB）。故**不再折算**。
+
+        用途：`_check_vram()` 判断"余量是否紧张"。取不到时返回 0（跳过检查）。
+        """
+        import re
+
+        for r, _kind, _role, size in self._models_with_size():
+            if r != repo:
+                continue
+            m = re.search(r"([\d.]+)\s*(GB|MB)", size or "", re.I)
+            if not m:
+                continue
+            val = float(m.group(1))
+            if m.group(2).upper() == "MB":
+                val /= 1024.0
+            return val
+        return 0.0
+
+    def _models_with_size(self):
+        """遍历清单里的 (repo, kind, role, size)（含 size 字段，供显存估算）。"""
+        declared = self.cfg.get("models") or []
+        kinds = tuple(self.MODEL_KINDS) or ("causal",)
+        for i, m in enumerate(declared):
+            if not isinstance(m, dict):
+                continue
+            repo = m.get("repo") or ""
+            if not repo:
+                continue
+            kind = m.get("kind") or kinds[min(i, len(kinds) - 1)]
+            yield repo, kind, m.get("role") or repo, m.get("size") or ""
+
     @staticmethod
-    def _check_vram(repo, device):
+    def _check_vram(repo, device, need_gb=0.0):
+        """加载前粗估显存是否够用，分三档处理。
+
+        为什么要三档（实测教训，2026-09-23）
+        ------------------------------------
+        原实现只在可用显存 < 2GB 时硬报错 —— 但**余量紧张比"不足"更常见也更隐蔽**：
+
+        ============  ==============  ===========================  ==========
+        可用显存       现象             实测（gpt-neo-2.7B fp16）    处置
+        ============  ==============  ===========================  ==========
+        >= need+3     正常            13.6 秒/条                   静默
+        need~need+3   **静默慢 10 倍** 139.9 秒/条，温度 32℃        **警告**
+                                    （GPU 在等，不在算）
+        < 2GB         可能溢出到内存   共享显存 +2163MB              **报错**
+                      WDDM 不报错
+        ============  ==============  ===========================  ==========
+
+        Windows WDDM 在显存不够时不报错，而是把数据换到系统内存走 PCIe
+        （慢约 30 倍）。用户只会觉得软件卡死了。所以余量紧张也必须提示。
+
+        :param need_gb: 该模型预计占用（GB，fp16 权重）；0 表示不检查余量
+        """
+        try:
+            import torch
+
+            if not (device and str(device).startswith("cuda")):
+                return
+            if not torch.cuda.is_available():
+                return
+            idx = 0
+            try:
+                idx = int(str(device).split(":")[1])
+            except Exception:
+                idx = 0
+            free, _total = torch.cuda.mem_get_info(idx)
+            free_gb = free / 1024 ** 3
+
+            # 硬门槛：低于 2GB 直接报错（原行为，保留）
+            if free_gb < 2.0:
+                raise RuntimeError(
+                    "显存不足：%s 当前可用 %.1fGB，低于 2GB 下限。"
+                    "请关闭占用显卡的程序，或在设置里改用 CPU 运行。"
+                    % (repo, free_gb)
+                )
+
+            # 余量紧张：不报错，但明确提示会变慢（新增）
+            if need_gb and free_gb < need_gb + 3.0:
+                import warnings
+
+                warnings.warn(
+                    "显存余量紧张：%s 预计占用约 %.1fGB，当前可用 %.1fGB。"
+                    "推理不会报错，但可能比正常慢 10 倍以上（数据在显存与"
+                    "系统内存之间搬运）。建议关闭占用显卡的程序。"
+                    % (repo, need_gb, free_gb))
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
         """加载前粗估显存是否够用，不够就明确报错。
 
         否则用户拿 8GB 显卡跑 2.7B 模型时不会看到任何错误，只会觉得
@@ -181,7 +274,7 @@ class BaseEngine:
                 tok.pad_token = tok.eos_token
             return tok
 
-        self._check_vram(repo, device)
+        self._check_vram(repo, device, self._weight_gb(repo))
         loaders = {
             "seq": AutoModelForSequenceClassification.from_pretrained,
             "causal": AutoModelForCausalLM.from_pretrained,

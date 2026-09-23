@@ -4,7 +4,7 @@
 - 背景：用户要求**不动原作者的文档**（`README.md`、`README.en.md`、
   `使用手册.md`、`CHANGELOG.md`），把待修订内容记在本文件里，等与原作者
   沟通后再统一处理。
-- 配套文档：`docs/AUDIT_2026-09-22.md`（代码修复记录）、
+- 配套文档：`docs/AUDIT.md`（代码修复记录）、
   `docs/PAPER_GAPS.md`（与论文的差异）
 
 ---
@@ -13,7 +13,44 @@
 
 1. **不改原作者的任何文档**
 2. 待修订内容记录在本文件
-3. 若将来修订，**依据必须是实测数据**（见 `docs/calibration/`）
+3. 若将来修订，**依据必须是实测数据**（见 `docs/calibration.md`）
+
+---
+
+## 零、`engines_manifest.json` 的问题（可选引擎清单）
+
+> 注：该文件是**可选引擎清单**（用户填 URL 拉取）。以下只记**实测证明有误**的项。
+> —— 2026-09-23 说明：原「URL 指向原作者仓库」一条已撤除，
+> 因为那是**功能设计**（清单就该指向发布地址），不属缺陷。
+
+### 0.1 【阈值有误】`zh_perplexity` 的阈值会让人写文本 95% 被判 AI
+
+**位置**：`engines_manifest.json:75`
+
+```json
+"params": { "ppl_high": 45.0, "ppl_low": 20.0 }
+```
+
+**实测（2026-09-23，HC3-Chinese 200 条 1:1）：**
+
+| 阈值组 | 准确率 | FPR | 说明 |
+|---|---|---|---|
+| 原值 (20, 45) | **0.5200** | **0.9500** | ❌ **95% 的人写文本被判 AI** |
+| 实测最优 (5.40, 14.40) | 0.8650 | 0.1800 | 误报偏高 |
+| **已改为 FPR≤5% 版 (2.88, 7.68)** | **0.6300** | **0.0400** | ✅ 可交付 |
+
+**原因**：中文 GPT-2 的 PPL 远低于英文。实测**中文 human 中位仅 13.64**
+（英文为 29.50），而 `ppl_low=20` 高于它 → 人写样本全部落到 `<=lo` 一侧，
+被判 AI。
+
+**同时修正了 `desc`**：原文写"阈值已按中文调整（PPL 20~45）"，
+把这个错误区间对外宣称了，已改为"注意：中文 PPL 远低于英文，阈值与英文组不通用"。
+
+**复现**：`python tools/audit_probes.py --only zh_threshold`
+**数据**：`docs/calibration.md` §2.8
+
+**状态**：✅ **已修（2026-09-23）** —— 改动的是该 JSON 里的 `params` 与 `desc`，
+它们属**引擎配置**（与 `catalog.py` 内的阈值同类），修正依据为实测。
 
 ---
 
@@ -244,16 +281,12 @@ DetectGPT / Fast-DetectGPT 缺 σ、GLTR 没实现 Test-2。
 
 ## 五、修订时的依据（实测数据位置）
 
-**所有修订都要有实测支撑**，数据在 `docs/calibration/`：
+**所有修订都要有实测支撑**，数据在 `docs/calibration.md`：
 
 | 文件 | 内容 |
 |---|---|
-| `zh_calib_simpleai.txt` | simpleai 中文 400 条 |
-| `zh_calib_gltr.txt` | gltr 中文 400 条 |
-| `zh_calib_binoculars.txt` | binoculars 中文 400 条 |
-| `ppl_calib_zh.txt` / `ppl_calib_en.txt` | gltr 的 PPL 分布标定 |
-| `calib_multi3_*.json` | 英文标定（三套数据集） |
-| `dg_probe_result.txt` | detectgpt 的 σ 对比实测 |
+| `calibration.md` | **标定数据**：中/英阈值依据、σ 实测、风格核查 |
+| `../AUDIT.md` §3.1 | 4 个引擎的修前基线 + 修前逐条概率 |
 
 ---
 

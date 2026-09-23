@@ -2,8 +2,8 @@
 
 - 记录日期：2026-09-23
 - 用途：本项目**遵循原作者风格**，不套用其他规范。改动代码前先看本表。
-- 数据来源：扫描 git 已跟踪的 41 个 `.py`（排除 `tools/audit_probes/`）
-- 原始数据：`docs/calibration/author_style.txt`（可重跑 `style_check.py` 复现）
+- 数据来源：扫描 git 已跟踪的 41 个 `.py`（排除 `tools/probes/`）
+- 原始数据：`docs/calibration.md` 第三章（可重跑 `python tools/audit_probes.py --only style_report` 复现）
 
 ---
 
@@ -138,7 +138,7 @@ tools/                      测试与辅助脚本（4 个 .py）
 
 ## 六、本次改动的一致性核对
 
-对 11 个改动文件做了逐项核验（数据：`docs/calibration/style_diff.txt`）：
+对 11 个改动文件做了逐项核验（数据：`docs/calibration.md` §3.3）：
 
 | 文件 | 原作者 >80 占比 | 我新增行 >80 占比 | 编码声明 | 判断 |
 |---|---|---|---|---|
@@ -162,10 +162,10 @@ tools/                      测试与辅助脚本（4 个 .py）
 
 ```
 # 扫描原作者风格（只读 git 已跟踪文件）
-python <探针目录>/author_style.py
-# 输出：docs/calibration/author_style.txt
+python tools/audit_probes.py --only style_report
+# 输出到控制台（不再落盘）
 
 # 核对改动是否一致
-python <探针目录>/style_diff.py
-# 输出：docs/calibration/style_diff.txt
+python tools/audit_probes.py --only style_report
+# 输出到控制台
 ```
