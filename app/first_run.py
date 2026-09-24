@@ -51,6 +51,12 @@ PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 #   * 放 app/ 下，卸载时随 app 一起删，天然回收。
 # 装完（或重试时选「重新开始」）由 _clean_caches() 清空。
 PIP_CACHE = os.path.join(APP_DIR, "_pipcache")
+# pip 的**临时目录**也收到我们自己的地盘。为什么必须这样：
+#   ``--cache-dir`` 只决定"下载完之后缓存放哪"，pip 下载**途中**的数据写在
+#   ``tempfile`` 目录（``%TEMP%\\pip-xxxx``）—— 于是按"缓存目录字节"画进度条
+#   会长时间不动、下完才跳（实测：3.5GB 的 torch 卡在 11.5MB 不动，2 分 45 秒
+#   后直接跳到 3.4GB）。把 TEMP 指到这里，两部分字节都能统计到。
+PIP_TMP = os.path.join(APP_DIR, "_piptmp")
 # PyTorch wheel 源（国内镜像 -> 官方兜底）；实际 URL = ``<base>/<cuXXX>``，
 # 其中 cuXXX 由 gpuinfo 按**驱动支持的 CUDA 版本**选（见 app/core/gpuinfo.py）。
 #
@@ -196,9 +202,18 @@ class PipProgress:
         self.done = 0
         self.t0 = time.time()
         self._stop = threading.Event()
+        self.install_phase = False
+        # 基线：本阶段开始前，缓存目录与临时目录里**已有**的字节（上一阶段下好的包）。
+        # 不减掉它，第二阶段的"已下载"会直接超过分母（实测 3.6GB / 275.5MB > 100%）。
+        self.base = _dir_bytes(cache_dir) + _dir_bytes(PIP_TMP)
 
     def feed(self, line):
-        """喂一行 pip 输出，累计"预期总大小"（分母）。"""
+        """喂一行 pip 输出：攒分母；并识别"下载完、开始安装"的转折。"""
+        if "Installing collected packages" in (line or ""):
+            # 下载阶段结束。此后字节不再增长，进度条不该再当"下载"用 ——
+            # 改成只报已下载量 + 安装中，免得卡在 97% 让人以为死了。
+            self.install_phase = True
+            return
         m = _PIP_SIZE_RE.search(line or "")
         if m:
             unit = (m.group(2) or "").lower()
@@ -212,15 +227,24 @@ class PipProgress:
 
     def _loop(self):
         while not self._stop.wait(0.1):        # 0.1 秒一跳（按用户要求）
-            self.done = _dir_bytes(self.cache)
+            self.done = max(
+                _dir_bytes(self.cache) + _dir_bytes(PIP_TMP) - self.base, 0)
             elapsed = time.time() - self.t0
-            if self.expect > 0:
+            if self.install_phase:
+                self.on_tick(
+                    "%s已下载 %s ｜ 安装中 ｜ 已用 %s"
+                    % (self.prefix, _fmt_size(self.done), _fmt_mmss(elapsed)),
+                    None,
+                )
+            elif self.expect > 0:
                 pct = min(99, int(self.done * 100 / self.expect))
-                eta = (elapsed / pct * (100 - pct)) if pct > 0 else 0
+                # 起步阶段算不出剩余就显示 `--:--`：写 00:00 是在说"马上好"，
+                # 而实际还要等好几分钟（实测第一屏就是 11.5MB / 3.5GB + 00:00）。
+                eta_txt = _fmt_mmss(elapsed / pct * (100 - pct)) if pct > 0 else "--:--"
                 self.on_tick(
                     "%s%s / %s ｜ 已用 %s ｜ 剩余 %s"
                     % (self.prefix, _fmt_size(self.done), _fmt_size(self.expect),
-                       _fmt_mmss(elapsed), _fmt_mmss(eta)),
+                       _fmt_mmss(elapsed), eta_txt),
                     pct,
                 )
             else:
@@ -240,10 +264,15 @@ def run_pip(args, on_line, progress=None):
     """
     env = sanitize_env()
     env["PYTHONUNBUFFERED"] = "1"
-    try:
-        os.makedirs(PIP_CACHE, exist_ok=True)
-    except OSError:
-        pass
+    # 见 PIP_TMP 的说明：pip 下载途中的数据落在 TEMP 下，指到我们自己的目录
+    # 才能被进度条统计到（也顺带不往用户 %TEMP% 里倒垃圾）。
+    env["TEMP"] = PIP_TMP
+    env["TMP"] = PIP_TMP
+    for d in (PIP_CACHE, PIP_TMP):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
     proc = subprocess.Popen(
         [RUNTIME_PY, "-m", "pip", "install", "--progress-bar", "off",
          "--cache-dir", PIP_CACHE] + args,
@@ -497,7 +526,7 @@ class FirstRun:
         为什么必须清干净：pip 遇到半成品文件会报一些莫名其妙的错，
         用户选了「重新开始」就是要一个干净起点，留着残渣等于没重开。
         """
-        targets = [PIP_CACHE, os.path.join(os.path.dirname(APP_DIR), "_downloads")]
+        targets = [PIP_CACHE, PIP_TMP, os.path.join(os.path.dirname(APP_DIR), "_downloads")]
         for p in targets:
             try:
                 if os.path.isdir(p):

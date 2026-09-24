@@ -165,75 +165,28 @@ DetectGPT 论文 §6 Limitations 原文：
 | 全量 21,200 条，单条 1.1 秒，合计 6.3 小时 | 2026-09-24 第一次实跑 | ✅ 方向对，但单条耗时本身有波动 |
 | **中 1.01 秒 / 英 0.65 秒 → 4.3h + 1.1h = 5.4 小时** | **2026-09-24 第二次实跑（用户全程观察进度条）** | ✅ 英文侧快于第一次；两次取保守值仍是 **6 小时量级** |
 
-### 已复现并定位：进度条被 print 打断（2026-09-24）
+### 进度条被 print 打断（2026-09-24，已修并写入 skill）
 
-第二次标速按用户要求投到外部窗口、由用户**全程观察**，复现出真问题：
+现象：5 条跑完 5 步，进度条停在 `1/5 = 20%`，明细却全打出来了（用户截图）。
+根因：① 循环内 `print` 与 tqdm 抢同一行；② 逐条调用引擎时 `progress_cb` 的 `done` 每次从 1 重来，
+`bar.update(done - last)` 第二次起等于 `update(0)`。
+修法：进度条活跃期一律 `tqdm.write()`（禁 `print`）；逐条调用前重置 `last = 0`
+（整批调用无此问题 —— 这也是"不要自己分块"的原因之一）。两条已写入 skill。
 
-| 现象 | 根因 |
-|---|---|
-| 5 条跑完 5 步，进度条**停在 `1/5 = 20%`** 再也不动，明细却全打出来了（用户截图确认）| ① 循环内用 `print` 输出明细，与 tqdm 抢同一行，把进度条挤停；② **每次只传 1 条文本**调用引擎时，`progress_cb` 的 `done` 每次都从 1 重来，`bar.update(done - last)` 第二次起等于 `update(0)`，只走了 1 步 |
+### 静态检查告警的处理（2026-09-24 完成）
 
-**修法**（已写入 skill 的进度条条目，避免再犯）：
+裸跑 `pyright` 曾报 **449 errors**，其中**约 370 条是检查器不了解本项目**（PySide6 stub 不全、
+`sys.path.insert` 注入的导入根、installer 的 tkinter 调用被误判），不是代码缺陷 —— 靠
+`pyrightconfig.json` 的 `extraPaths` + 关掉那几类规则消化。`reportOptionalXxx` 那 ~80 条
+逐条查过**无真 bug**（全在"运行期必非 None、静态看不出"的位置）；**若要重开这些规则，
+须同步给对应位置加 `# pyright: ignore[...]` 并注明原因**，否则立刻回到几十条噪声。
 
-- 进度条活跃期间输出一律用 `tqdm.write()` / `bar.write()`，**禁用 `print`**
-- 逐条调用时**每次调用前重置 `last = 0`**（或改用 `bar.update(1)`）；
-  整批一次调用不存在此问题 —— 这也是「不要自己分块」的原因之一
+**现状**：`npx --yes pyright` = **0 errors**。
 
-**影响**：只影响长任务的可观测性，不动主线功能、不改变产出结果。
-脚本已按上述两点修好（`%TEMP%\aigc_fast_speed.py`），供后续标定器起步。
-
-### 静态检查告警的处理（2026-09-23 记录，2026-09-24 完成）
-
-删掉 `pyrightconfig.json` 后裸跑 `pyright` 会报 **449 errors**。逐类看过，
-**约 370 条不是代码问题，是检查器不了解本项目**：
-
-| 类别 | 数量 | 性质 | 处置 |
-|---|---|---|---|
-| `Import "core.*" could not be resolved` | ~100 | 运行时由 `sys.path.insert` 注入 `app/`，静态看不到 | `extraPaths` 覆盖两个导入根（**必须保留**）|
-| `Cannot access attribute "Yes"/"UserRole"/"Horizontal" for class "type[Qt]"` | ~50 | `Qt` 是枚举容器，PySide6 stub 不全 | 检查器误判，关 `reportAttributeAccessIssue` |
-| `Argument of type "str \| None" ... "title" of type "str"` | ~60 | `tr()` 返回注解缺失（实际永不为 None）| `tr()` 已能推断为 `str`，**关闭该类已不再必要** ✅ |
-| `int` cannot be assigned to `pack_configure` | ~40 | `installer.py` 的 tkinter 调用误判 | 检查器局限，关 `reportArgumentType` |
-| `reportOptionalSubscript` / `reportOptionalOperand`（`None` 参与运算）| ~80 | ⚠️ 可能含真 bug | **本次逐条查完**，见下 ✅ |
-| `predict_paragraphs` 重写不兼容 | 4 | 项目设计如此（子类用 `**kwargs`）| 关 `reportIncompatibleMethodOverride` |
-
-**2026-09-24 的清理结果**
-
-1. `tr()` 的返回注解 —— 复查后**不需要改**：`EN` / `ZH` 是字面量 dict，
-   `table.get(key, key)` 的两条返回路径都是 `str`，`--verifytypes` 级别的证据
-   是 `reportArgumentType` 关掉后仍 0 error；当年那 ~60 条的根因是
-   `reportArgumentType` 那一大类，**已随该类关闭而消失**，不是 `tr()` 的问题。
-2. `reportOptionalXxx` 那 ~80 条**逐条查完，无真 bug**：全部集中在
-   `installer/` 的 `os.environ.get(...)`、`ui/*.py` 的 `self.parent()`、
-   `engine.last_buckets` 等「运行期必非 None、静态看不出来」的位置
-   （如 `build_report(buckets=None)` 的默认值、`cluster` 里先判空再取值）。
-   故保留关闭状态；**若要重开，须同时给这些位置加 `# pyright: ignore[...]`
-   并注释原因**，否则会立刻回到几十条噪声。
-3. `base.py::_encode_capped` 里多余的 `import torch` 删掉（本方法只用
-   `tok()` 返回值，不引用 `torch`）；`engines/__init__.py` 的 5 条对外接口
-   导入加**单行** `# pyright: ignore[reportUnusedImport]`。
-
-**现状**：`npx --yes pyright` = **0 errors, 0 warnings**（此前 6 条 warning）。
-
-**注意**：做不到"改代码让 449 条全消失" —— 约 370 条源于检查器局限
-（PySide6 stub、运行时路径注入、tkinter 误判），不是代码缺陷。
-
-**已确认不做**：换论文的 Falcon-7B 打分模型 / 抓论文数据集（理由见 §1、§2.5）；
-改原作者文档；工程清理中的行长与编码声明。
-
-**已完成（不再挂待办）**：
-
-| 事项 | 结论 |
-|---|---|
-| 阈值是否收敛 | ✅ **留出集验证通过**：标定集 0.8615 / 留出集 0.8673（落差 −0.58 点，**无过拟合**）|
-| 划留出集 | ✅ `tools/probes/holdout.py`（按**问题**拆分防泄漏）|
-| **`binoculars` 英文重标** | ✅ 0.615 → **0.8152**（旧值 FNR 0.998，几乎抓不出 AI）|
-| **gltr 中英重标** | ✅ 英文 (12,25) → **(8.69, 25.64)**；中文 → **确认不可交付**（FNR 73%），用 `zh_perplexity` 替代 |
-| **simpleai 实跑复核** | ✅ 中文 acc 0.9902 / AUC 0.9998；英文 AUC **0.4397**（低于随机）|
-| **标定值全部实跑落盘** | ✅ gltr / binoculars / simpleai / zh_perplexity 均由探针写入 json（此前 4 项是抄文档）|
-| **装机 / 界面 / 配置测试** | ✅ 三个探针（`package_flow` / `ui_flow` / `ui_config`），见 §6 |
-| **GLTR 四档柱状图（2026-09-24）** | ✅ 每段下方「横向堆叠柱 + 同色图例数字」，见 §8 |
-| **静态检查告警清理（2026-09-24）** | ✅ `pyright` = **0 errors, 0 warnings**，见 §3 |
-| **真装机实测（2026-09-24）** | ✅ 实跑 `perform_install()` + 卸载，**首次证实装完读到的阈值来自标定 json**，见 §6.5 |
+**已完成 / 不再挂待办**（明细见 §6 与 §8）：阈值收敛性（留出集落差 −0.58 点）、留出集拆分按问题防泄漏、
+`binoculars` / `gltr` / `simpleai` / `zh_perplexity` 重标并**实跑落盘**、装机 / 界面 / 配置三探针、
+GLTR 四档柱状图、真装机实测、pyright 归零。**不做**：换论文的 Falcon-7B 与抓论文数据集（§1、§2.5）、
+改原作者文档、行长与编码声明、并行数改下拉。
 
 ---
 
@@ -619,16 +572,91 @@ test_detect / fusion_selftest 全过、`env_setup` 与 `package_flow` 全项 OK�
 
 **更新日期**：2026-09-24（晚）
 
----
+### 8.11 界面与首启体验修复 + 用户数据路径治本（2026-09-24 深夜）
 
-## 9. GLTR 四档展示（数字版，2026-09-23）
+用户装新包后实测第二轮，逐条定位并修掉 11 项 —— **全部源自 v1.0 的原作者实现**
+（用 `git log -S` 逐个核过），不是上几轮引入的。
 
-已由 §8.1 的柱状图取代，**接口不变**（`build_report(..., buckets=...)`、
-`engine.last_buckets` 旁路）。保留本节只为说明接法，免得后人重找：
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 首启下载进度**卡住不动、下完才跳**（11.5MB → 3.4GB） | `--cache-dir` 只管"下完之后的缓存"，pip 下载**途中**的数据写在 `%TEMP%\pip-xxxx`（pip 源码 `_cache_resumed_download` 从 `download.output_file` 读临时文件再写缓存）→ 按缓存目录统计必然长时间不动 | `first_run.py` 新增 `PIP_TMP`，把 pip 的 `TEMP/TMP` 指到 `app\_piptmp`；`PipProgress` 统计 `cache + tmp` |
+| 2 | 进度**超过 100%**（3.6GB / 275.5MB） | 分子是整目录累计（含上一阶段 torch 的 3.4GB），分母是本阶段日志累加 | `PipProgress` 记**阶段基线**并在每跳扣掉 |
+| 3 | 起步就显示"剩余 00:00" | `pct=0` 时 ETA 被算成 0 | 算不出剩余就显示 `--:--` |
+| 4 | 左栏被滚动条挤压、"不能左右拖" | 那条是 QScrollArea 的竖直滚动条；左右栏 2:3 写死，没有分隔条 | 换 `QSplitter`（可左右拖）+ 左栏 `setMinimumWidth(360)` |
+| 5 | 阈值框显示 10%、滑块却居中（**全新安装必现**） | 顺序：`setValue(50)` → 建 spin（默认 0 被 setRange 夹到 10）→ **信号最后才连**；`_apply_params_from_settings` 再设同一个 50 不触发 `valueChanged` | 建完显式 `thr_spin.setValue(thr_slider.value())`；另两处赋值改设数字框（经信号同步滑块） |
+| 6 | 检测进度停在 14% 后跳一大截 | `detect_local` 单卡分支没把 `progress_cb` 传下去，`_run_one_device` 也没交给引擎（引擎其实支持）—— **v1.0 就漏了** | 单卡路径打通；进度文案加"已用 / 剩余"（用上原作者留着没用的 `self.start_ts`） |
+| 7 | 关于框赞赏码显示"图片缺失" | `BASE_DIR` 本身已是 app 目录，`_donate_image_path` 又拼一层 `app/assets/...` → `app\app\assets\...` | 去掉重复层 + 多候选兜底 |
+| 8 | 窗口不能拖大小 | `FramelessWindowHint` 去掉了系统边框，Qt 便不再提供缩放 | `glass.py` 新增 `EdgeResizer`：边缘 6px 内按下交给 `QWindow.startSystemResize`（含 8 方向光标） |
+| 9 | GPU / 集群两个勾没有自检 | 原作者没做 | 各加「检测」按钮：GPU 查 `gpuinfo` + `torch.cuda.is_available()`，集群查 `nodes_snapshot()`；不通过**自动取消勾选** |
+| 10 | 英文界面按钮文字被裁 | 窗口 1120×780 按中文标签定宽 | 统一 **1240×780**（按英文需求定，中英同尺寸）+ 左栏按语言给宽度 |
+| 11 | PDF 全文并成一段（报告只有 1 行） | `split_paragraphs` 只认空行，而 PDF 提取的是排版行、段间没有空行 | `doc_reader.py` 做**版面重建**（见下） |
 
-- 接法：`predict_paragraphs` 的 `list[float]` 约定被三处共用，故走**实例属性旁路**
-  （`engine.last_buckets`）；`detect_local` 一并回传引擎实例
-- 调用方一行未改（`benchmark` / `cluster` 只读 probs）
-- 集群模式仍无四档（分片在节点进程内算，跨节点合并需另设计协议）
-- `ppl` 路线下四档只展示；只有 `method="rank"` 时四档才参与判别
+**PDF 版面重建（#11）**（`app/core/doc_reader.py`，+232 行）：
+`visitor_text` 取坐标 → 聚成行 → 剔页眉页脚 → 按 x0 分栏 → 按**行距跳变 / 末行变短 /
+编号标题行**切段 → 段间填 `\n\n`（下游一行未改）。
+实测用户那份 PDF：**1 段 → 152 段**，0.9 秒。两个坑：
+① `tm` 必须乘 `cm` 才是页面坐标（否则某 PDF 的行距被算成 2.6pt，全篇分不出行）；
+② 页眉页脚不能按绝对坐标判（不同 PDF 基准差极大，实测 0~30 与 0~790 都有）→ 改成按行数比例砍头尾。
+
+**用户数据路径治本（原 #14）**
+原先 `BASE_DIR` 指 `<安装目录>\app`，而安装器把设置写在 `<安装目录>\settings.json`
+—— 差一层 `app`。后果：安装器写的语言永远读不到；用户设置落在 `app\settings.json`，
+重装时 `rmtree(app)` 连**参数预设一起清掉**；模型在 `app\models`，卸载器找
+`<安装目录>\models` → 勾了"删除模型"也删不掉。
+现统一到 `core.settings.base_dir()` = **安装目录**（源码模式 = 仓库根），并新增
+`migrate_legacy_layout()`：把老位置的 settings / license / engines_*.json / models
+搬到根，**目标已存在不覆盖**、幂等、失败不阻塞启动。`app/settings.json`（开发残留）已删。
+
+**卸载器加进度条（同日补充）**
+用户实测反馈："卸载器一运行就自动退出了，在后台执行，应该留着、有进度条。"
+核对后卸载其实**已成功**（注册表项/快捷方式/`app/` 都清掉了），问题是**过程零反馈**：
+点完"卸载"只弹一个"完成"框就关窗，而目录删除在后台跑 —— 看着就是"程序崩了"。
+
+- 删除改成 `_count_files()`（先数分母）+ `_rm_counted()`（**每删一个文件回报一次**，
+  因为 `shutil.rmtree` 的回调只在出错时触发，报不了进度）
+- 界面加状态行 + `ttk.Progressbar`，删除在后台线程跑、经 `queue` 回主线程刷新
+- **删完不再自动关窗**：按钮变「关闭」，由用户自己关；删除中点窗口 X 会提示"跑完再关"
+  （daemon 线程被掐断会留下半删目录）
+- 自删那步加了重试（`del` 之后 `rd` 再试两次）—— 此前 `uninstaller.exe` 句柄释放慢，
+  常留下一个空安装目录（本次实测就留了一个）
+
+
+探针 ui_flow（主窗口 + 真跑检测 + 设置往返 + 降重）/ ui_config / package_flow 通过、
+`migrate_legacy_layout` 单测（搬运 / 幂等 / 不覆盖）通过、`PipProgress` 分母解析
+（3,745,310,515 字节）与"安装阶段"识别通过。
+
+**改动文件**：`app/first_run.py`、`app/core/detector.py`、`app/core/doc_reader.py`、
+`app/core/settings.py`、`app/core/i18n.py`、`app/ui/main_window.py`、`app/ui/glass.py`、
+`app/main.py`（+ 三个产物重打）。
+
+**GPU 推理实测（原 #10，当日补做）**
+条件：RTX 4080 SUPER 16GB、`D:\hf_cache\aigc_models` 本地模型、用户那份论文取前 20 段（9011 字符）。
+每次先热身一轮再计时；`nvidia-smi -lms 200` 采样。
+
+| 引擎 | GPU | CPU | 加速比 | 概率差异 | 判定一致 |
+|---|---|---|---|---|---|
+| `simpleai` | 0.38s（0.019 s/段） | 0.93s（0.047 s/段） | **2.44x** | max 0.0002 | Kendall τ **1.000** |
+| `binoculars` | 2.12s（0.106 s/段） | 7.38s（0.369 s/段） | **3.49x** | max 0.0035 / avg 0.0009 | 阈值 0.8152 下 **20/20 一致**，τ **1.000** |
+
+GPU 观测：显存峰值 3551 MiB（simpleai）/ 4542 MiB（binoculars）；功耗峰值 46W / 65W；
+利用率均值 6.5%~7.9%、峰值 14%（200ms 采样下**没有一次超过 20%**）。
+
+**结论**：
+1. **GPU 用上了** —— 显存、功耗、利用率都有脉冲，且结果与 CPU 一致；用户此前"没看到显存和
+   3D 占用"是因为截图那一刻还在**下载模型**阶段，没进推理。
+2. **加速比随模型增大而提高**（0.1B 的 simpleai 2.44x → 1.9GB 双模型的 binoculars 3.49x）。
+3. **利用率低是结构性的**：引擎是**逐段串行**推理，段落平均 450 字符 → 单次前向只有几毫秒，
+   分词、数据搬运（H2D）、softmax 这类固定开销占了大头，GPU 自然是脉冲式占用；
+   任务管理器按 1 秒平均后看着就是"10% 左右、没动静"。
+4. **fp16(GPU) vs fp32(CPU) 的数值差异不影响判定**（τ=1.000、阈值判定 20/20 一致）。
+5. **已知可优化项（未做）**：把"逐段"改成"按批"推理能显著抬高利用率，但要改引擎的
+   `predict_paragraphs` 契约（三处共用），属独立优化，不在本轮范围。
+
+**未做**：并行数改下拉（用户否掉）。
+
+**打包脚本收尾清理（同日补充）**：`tools/build_exe.ps1` 打完自动删掉 `dist\uninstaller.exe` 与 `build\`
+—— 前者只是安装器的 `--add-data` 输入（装机时由安装器复制到安装目录），后者是 PyInstaller 中间产物，
+两者都不入库，留着只会让工作区看起来有垃圾。已实跑一次验证：打完三件产物后两处自动清空。
+
+**更新日期**：2026-09-24（深夜）
 

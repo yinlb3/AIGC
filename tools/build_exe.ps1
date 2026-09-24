@@ -112,3 +112,11 @@ Get-Item (Join-Path $proj 'dist\uninstaller.exe'),
          (Join-Path $appdir 'first_run_gui.exe'),
          (Join-Path $proj 'dist\AIGC_Toolkit_Setup.exe') |
     Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
+
+# Leave the tree clean. uninstaller.exe was only an input for the installer's
+# --add-data (it is copied into the install folder at install time), and build\
+# is PyInstaller scratch. Neither is tracked by git, so keeping them around
+# just makes the working tree look like it has leftovers.
+Remove-Item (Join-Path $proj 'dist\uninstaller.exe') -Force -ErrorAction SilentlyContinue
+Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "cleaned: dist\uninstaller.exe and build\ removed (the next build recreates both)" -ForegroundColor DarkGray

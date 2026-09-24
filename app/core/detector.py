@@ -22,6 +22,11 @@ def _devices(params):
 
 def _run_one_device(engine_cfg, base_dir, paragraphs, device, params, progress_cb=None):
     engine = create_engine(engine_cfg, base_dir)
+    if progress_cb:
+        # 引擎接口本来就支持 progress_cb（simpleai 每段回调一次），但这个参数
+        # 此前**接了没人用** —— 单卡（绝大多数用户）因此整个检测阶段进度条都
+        # 不动，只在 4%~14%（下载模型）与结尾 99% 跳两下。
+        params = dict(params, progress_cb=progress_cb)
     probs = engine.predict_paragraphs(paragraphs, device, **params)
     # 一并回传引擎实例：统计派引擎会把逐段四档（GLTR Test-2）存在
     # `last_buckets` 上，只返回 probs 的话那份数据就随实例一起丢了。
@@ -39,7 +44,10 @@ def detect_local(engine_cfg, base_dir, paragraphs, params, progress_cb=None):
         raise RuntimeError(tr("torch_unavailable") % _torch_error())
     devices = _devices(params)
     if len(devices) == 1:
-        return _run_one_device(engine_cfg, base_dir, paragraphs, devices[0], params)
+        # 单卡/CPU：把 progress_cb 一路传进引擎（多卡分支不传 —— 分片在各自
+        # 线程里跑，多个回调同时改同一条进度条只会打架）
+        return _run_one_device(engine_cfg, base_dir, paragraphs, devices[0],
+                               params, progress_cb)
 
     total = len(paragraphs)
     chunk = max(total // len(devices), 1)

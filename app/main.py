@@ -3,14 +3,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.settings import Settings
+from core.settings import Settings, base_dir, migrate_legacy_layout
 from core.netfix import apply_env_fix
 
 # 系统代理若是 socks（VPN 客户端常见写法），Python 侧一律走直连，否则模型下载必挂
 apply_env_fix()
 
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
-_settings = Settings(os.path.join(_APP_DIR, ".."))
+# 用户数据根目录 = 安装目录（与安装器写 settings.json 的位置一致）
+_BASE_DIR = base_dir()
+# 旧布局（用户数据在 app\ 里）搬到安装目录根：只做一次，失败不影响启动
+migrate_legacy_layout(_BASE_DIR)
+_settings = Settings(_BASE_DIR)
 _mirror = _settings.get("download", "hf_endpoint", default="https://hf-mirror.com")
 os.environ.setdefault("HF_ENDPOINT", _mirror)
 
