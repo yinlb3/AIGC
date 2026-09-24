@@ -132,13 +132,14 @@ DetectGPT 论文 §6 Limitations 原文：
 
 ## 3. 待办
 
-**只剩 3 项**（前 3 项已解决，见下）。按花费时间排序，有前置依赖的排后。
+**只剩 4 项**（前 3 项已解决，见下）。按花费时间排序，有前置依赖的排后。
 
 | 优先级 | 事项 | 耗时（实测更新） | 卡点 |
 |---|---|---|---|
 | 中 | `detectgpt` 中文换 **mT5**（论文用 `google/mt5-xl`）→ 标定 | 下载 ~1 小时 + 标定 ~1.8 小时 | 论文给了方案（见 §2.4）；扰动档按论文跑 `1,10,100` |
 | 高 | **`fastdetectgpt` 中英标定** | **~5.5 小时**（两次实测：中 15,216×1.01s = 4.3h + 英 5,984×0.65s = 1.1h；模型加载 21 秒）| 显存 free 14.7GB，**7GB 红线已不成问题**（实测）；须与上一项排队用卡 |
 | 低 | **pyright 剩 5 条 `reportUnusedImport` warning** | `app/core/engines/__init__.py`：4 条对外接口导入（`BUILTIN_ENGINES` / `EngineManager` / `load_plugins` / `register`）+ 1 条 `try: import torch` 探测导入。2026-09-24 曾用单行 `# pyright: ignore[...]` 抑制，**用户要求改为如实记录、不做抑制**，故 pending |
+| 高 | **用新 exe 装一次复核**（装机端到端）| ~30 分钟（含下 2~3GB 依赖）。2026-09-24 晚只做完静态验证：待验「装完自动关闭 / 日志首行构建信息 / `<安装目录>\uninstaller.exe` 到位 / 注册表 `UninstallString` 指向它 / 点它卸载能清干净」—— 见 §8.10 |
 
 ### 原「k 提到 100」已撤销（2026-09-24）
 
@@ -300,7 +301,9 @@ DetectGPT 论文 §6 Limitations 原文：
 4. **界面真跑检测** —— `load_file()` → 点 `btn_start` → 等 worker 启动 → 读 `result_label`
    （不是"构造一下"就算过）。
 
-**未覆盖**：打包 exe（仓库无 `.spec`）。
+**原先"未覆盖：打包 exe（仓库无 `.spec`）"—— 2026-09-24 晚已补**：
+重建 `tools/build_exe.ps1`（三步、顺序不可反），见 §8.10。这条盲区是那次
+"装机装出来全是旧现象"的直接原因：源码改了，但没人重新打包。
 
 ### 6.5 真装机实测（2026-09-24 补做）
 
@@ -382,7 +385,7 @@ DetectGPT 论文 §6 Limitations 原文：
 | safe | `style_report` | 原作者风格核查 |
 | safe | `xformers_sig` `bino_math` `style_loop` `license_i18n` `logprob_chunk` | API / 公式 / 死循环 / license / 分块口径 |
 | safe | **`package_flow`** | 装机流程静态检查（必需文件、标定数据位置、零依赖、卸载）|
-| safe | **`env_setup`** | **新增**：路径校验 / CUDA 映射 / 卸载器模板 / 进度解析 / 启动自检 |
+| safe | **`env_setup`** | **新增**：路径校验 / CUDA 映射 / 卸载器（独立 exe）/ 进度解析 / 启动自检 |
 | safe | **`display_marks`** | **新增**：报告四档和恒为 100 / 柱状图边界 / 引擎语言标注 |
 | safe | **`ui_config`** | UI 配置合理性（默认值、控件与设置项对应）|
 | heavy | `cluster_port` `cluster_chain` | 集群端口与发现链路 |
@@ -396,6 +399,8 @@ DetectGPT 论文 §6 Limitations 原文：
 **注**：标定器跑完**自动写 json**，不需手工抄数字 —— 见 `AGENTS.md`「标定值必须外置」。
 **装机项已升级为实测**：§6.5 真跑过 `perform_install()`，本节的 `package_flow` 保留为
 日常回归（秒级、无副作用），两者互补。
+**打包项同样不再靠人记**（2026-09-24 晚）：`tools/build_exe.ps1` 生成带 git 短哈希的
+`build_info.json`，装完日志首行就能看出装的是哪一版 —— 见 §8.10。
 
 ---
 
@@ -531,7 +536,7 @@ arXiv MCP 报 406，按规则改用 `curl` 直连 arXiv API + GitHub MCP 对照�
 
 | 现象 | 根因 | 修法 |
 |---|---|---|
-| 用户自选环境路径时，卸载器里的 `RUNTIME_ROOT` 指向该路径的**父目录**；若用户选 `D:\myenv`（只一层），反推得到 `D:\` —— 卸载时 `rd /s /q` 会删到**磁盘根** | `register_uninstall` 从 `pythonw.exe` 往上反推两级 | 改由 `perform_install` **直接传入用户选定的那个环境目录**（`@RUNTIME_DIR@`）；卸载只删该目录本身，绝不碰父目录（仅当父目录恰是默认的 `<TARGET>\runtime` 时才顺手删空壳）|
+| 用户自选环境路径时，卸载器里的 `RUNTIME_ROOT` 指向该路径的**父目录**；若用户选 `D:\myenv`（只一层），反推得到 `D:\` —— 卸载时 `rd /s /q` 会删到**磁盘根** | `register_uninstall` 从 `pythonw.exe` 往上反推两级 | 改由 `perform_install` **直接传入用户选定的那个环境目录**（`@RUNTIME_DIR@`）；卸载只删该目录本身，绝不碰父目录（仅当父目录恰是默认的 `<TARGET>\runtime` 时才顺手删空壳）。**2026-09-24 晚改独立 exe 后**：占位符方案取消，环境路径由安装器写进注册表 `RuntimeDir`、卸载器读它 —— 见 §8.10 |
 
 ### 8.9 改动文件（本轮全部）
 
@@ -559,6 +564,60 @@ arXiv MCP 报 406，按规则改用 `curl` 直连 arXiv API + GitHub MCP 对照�
 | OneDrive 真源 `SKILL.md` + `.agents`/`.claude`/`.codex` 副本 + `.cline/rules/user-preferences.md` | 进度条两条教训（`tqdm.write()` 禁用 `print`；`progress_cb` 逐条重置）|
 
 **更新日期**：2026-09-24
+
+### 8.10 卸载器 exe 化 / 打包流程重建 / 装完自关（2026-09-24 晚）
+
+**背景**：用户按 `HANDOFF.md` 实测装机，看到的界面全是旧样（没有语言标注、没有 `❔`、默认引擎
+也不对），安装器装完不关，卸载入口是 `pythonw.exe + .pyw`。查证结论 —— **装出去的是 9/19 的包**：
+
+| 证据 | 事实 |
+|---|---|
+| `git log -1 -- app/first_run_gui.exe`、`-- dist/AIGC_Toolkit_Setup.exe` | 最后提交都是 `63f47ad`（**9/19**，作者那版）|
+| `app/core/engines/engines_calibration.json` 首次提交 | `11edfcb`（9/24）—— 旧安装器里**根本没有**这个文件 |
+| 装机的全局 pip 缓存内容 | 有 `docx-0.2.4`（2014 年错包）→ 用的是修正前的依赖表 |
+
+**根因**：`app_source_dir()` 在打包后返回 `sys._MEIPASS/app`，即**安装器把 app 的快照打在自己里面** ——
+源码改了必须重新打包，否则装出去永远是旧代码。而仓库里既没有 `.spec` 也没有打包脚本
+（作者原有 `build_installer.ps1` / `.bat`，在"精简仓库" `3e162a6` 时被删），这步一直靠手工敲命令。
+
+| # | 改动 | 要点 |
+|---|---|---|
+| 1 | **卸载器改独立 exe** | 新建 `installer/uninstaller.py` → `dist/uninstaller.exe` → 装机复制到 `<安装目录>\uninstaller.exe`，注册表 `UninstallString` 指向它。旧方案（生成 `.py` 交给 `pythonw`）退场：一般软件卸载入口都是 exe；`.py` 依赖运行环境，环境坏了卸载器自己也跑不起来 |
+| 2 | **环境路径写进注册表** | 安装器写 `RuntimeDir`，卸载器读它（用户可能把环境放到别的盘）|
+| 3 | **安装器装完自动关闭** | 成功 → 提示一次后 `destroy()`（此前只弹提示 + 复位按钮 → 用户以为没装完、还能再点一次"开始安装"）；失败才复位按钮 |
+| 4 | **打包流程重建** | `tools/build_exe.ps1`：三步（uninstaller → first_run_gui → installer，**顺序不可反**）；后两者随安装器内嵌分发 |
+| 5 | **构建标记（防呆）** | 打包生成 `build_info.json`（版本 + git 短哈希 + 时间，**无 BOM**），安装日志首行打印，并落到安装目录；读侧 `utf-8-sig` 兜底 |
+| 6 | **探针同步** | `env_setup` 第 3 节、`package_flow` 第 5 节：核查对象从模板字符串改为 `installer/uninstaller.py`；新增「旧模板已退场 / RuntimeDir 两边一致 / 安装器复制注册 exe / 自删 `del`+`rd`」四项 |
+| 7 | **旧包残留清理** | 删 `%LOCALAPPDATA%\pip\Cache`（2.915 GB，旧 exe 装的依赖缓存）与 `%TEMP%` 6 项探针残留；注册表 / 快捷方式 / PATH / 安装目录复查干净 |
+
+**打包时踩到并修掉的两个坑**（都写进了代码注释）：
+`build_info_path()` 的 `..` 写重 → 跑到仓库外读不到文件；PS 5.1 的 `Set-Content -Encoding UTF8`
+写 BOM → `json.load` 抛异常、静默退化成 `dev`。
+
+**产物**：`dist/uninstaller.exe` 11,905,769 ｜ `app/first_run_gui.exe` 11,843,441 ｜
+`dist/AIGC_Toolkit_Setup.exe` 36,720,488（旧包 24,736,939，且不含 `engines_calibration.json`）。
+
+**验证**：pyright 0 errors（5 条 warning 见 §3）、smoke 10/10、engines 13/13、
+test_detect / fusion_selftest 全过、`env_setup` 与 `package_flow` 全项 OK；
+`build_line()` 实测输出 `安装包：v1.3.0 ｜ 构建 1d9eb02 ｜ 2026-09-24 07:35:38`。
+
+**未做**：用新 exe 真装一次 —— 装机端到端才是最终判据，见 §3 待办（第 4 项）。
+
+**改动文件**
+
+| 文件 | 操作 |
+|---|---|
+| `installer/uninstaller.py` | **新建**（独立卸载器）|
+| `installer/installer.py` | 删 219 行模板；`register_uninstall()` 改为复制 exe + 写 `RuntimeDir`；装完自动关闭；新增 `build_info_path` / `build_stamp` / `build_line` / `uninstaller_source`；补 `import json` |
+| `tools/build_exe.ps1` | **新建**（三步打包 + 构建标记）|
+| `tools/probes/env_setup.py` | 第 3 节改核查 `uninstaller.py`，并加安装器/卸载器接口四项 |
+| `tools/probes/package_flow.py` | 第 5 节同上（新增 4 项检查）|
+| `tools/audit_probes.py` | env_setup 探针描述文案同步 |
+| `app/core/i18n.py` | `inst_build_line`、`inst_uninstaller_missing`（中英各一条）|
+| `app/first_run_gui.exe`、`dist/AIGC_Toolkit_Setup.exe` | 重打（产物）；新增 `dist/uninstaller.exe`（随 dist 忽略规则，不入库）|
+| `docs/FIXES.md`、`docs/HANDOFF.md`、`docs/CHECK_FLOW.md`、`AGENTS.md` | 文档同步 |
+
+**更新日期**：2026-09-24（晚）
 
 ---
 

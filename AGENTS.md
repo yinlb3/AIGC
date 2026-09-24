@@ -92,6 +92,17 @@ C:\ProgramData\miniconda3\envs\pytorch\python.exe tools\audit_probes.py      # s
 ... tools\audit_probes.py --only ui_config      # 默认值合理性
 ```
 
+## 发布打包（改了 `app/` 或 `installer/` 必跑）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_exe.ps1
+```
+
+三步、**顺序不可反**：`dist\uninstaller.exe` → `app\first_run_gui.exe` → `dist\AIGC_Toolkit_Setup.exe`
+（安装器把前两个和整个 `app\` 当数据打在自己里面）。**不重新打包，用户拿到的就还是旧代码** ——
+2026-09-24 实测踩过：源码全改了，装机看到的现象全是 9/19 那版的（`docs/FIXES.md` §8.10）。
+装完的安装日志首行会打印 `build_info.json` 里的版本 + git 短哈希，用来核对。
+
 ## 静态检查
 
 `npx --yes pyright`（期望 0 errors）；它能抓出 heavy 组探针里的未定义名、重复定义等"从没跑过所以没人发现"的错。
@@ -125,4 +136,5 @@ C:\ProgramData\miniconda3\envs\pytorch\python.exe tools\audit_probes.py      # s
 | `tools/audit_probes.py` | 可复现探针（29 个，`--list` 看组 / 代价 / 风险；safe 组默认跑） |
 | `tools/prepare_datasets.py` | 数据集加载（内存处理，不落盘） |
 | `tools/export_calibration.py` | 导出标定值（`--audit` 查漏） |
+| `tools/build_exe.ps1` | **发布打包**（三个 exe，顺序不可反；带构建标记）|
 

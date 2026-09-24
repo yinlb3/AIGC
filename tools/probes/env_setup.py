@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""安装 / 运行环境检查：路径校验、CUDA 映射、卸载器模板、进度解析、启动自检。
+r"""安装 / 运行环境检查：路径校验、CUDA 映射、卸载器 exe、进度解析、启动自检。
 
 为什么要做成探针
 ----------------
@@ -98,15 +98,17 @@ def run_env_setup(v):
         print("   [FAIL] CUDA 11.6 应回落到 CPU 版")
     print()
 
-    # ---------------------------------------------------- 3. 卸载器模板
-    print("--- 3. 卸载器模板（三个勾 / 占位符 / 语法）---")
-    src = (inst.UNINSTALLER_TEMPLATE
-           .replace("@TARGET@", r"D:\X")
-           .replace("@RUNTIME_DIR@", r"D:\X\env\py")
-           .replace("@EMAIL@", "a@b.c"))
+    # ---------------------------------------------------- 3. 卸载器（独立 exe）
+    print("--- 3. 卸载器 installer/uninstaller.py（三个勾 / 自删 / 语法）---")
+    unp = os.path.join(_INST, "uninstaller.py")
+    try:
+        with open(unp, "r", encoding="utf-8") as f:
+            src = f.read()
+    except OSError as e:
+        ok_all = False
+        src = ""
+        print("   [FAIL] 读不到 %s: %s" % (unp, e))
     checks = [
-        ("占位符全部替换",
-         not any(p in src for p in ("@TARGET@", "@RUNTIME_DIR@", "@EMAIL@"))),
         ("三个勾变量都在",
          all(k in src for k in ("chk_cache =", "chk_run =", "chk_models ="))),
         ("三个勾默认都不打（False）",
@@ -115,8 +117,10 @@ def run_env_setup(v):
          all(k in src for k in ("cache_dirs", "run_dir", "models_dir"))),
         ("模型只删自己的子目录（不整删 models_dir）",
          "_ENGINE_DIRS" in src and "rmtree(models_dir" not in src),
-        ("runtime 延迟删除（避开自身文件锁）",
-         "ping 127.0.0.1" in src and "rd /s /q" in src),
+        ("运行环境路径取自注册表（用户可能放到别的盘）",
+         "RuntimeDir" in src),
+        ("自删：延迟 del exe + rd 目录（避开自身文件锁）",
+         "ping 127.0.0.1" in src and "del /f /q" in src and "rd /s /q" in src),
         ("卸载器声明不改用户环境", "不会修改" in src),
     ]
     for name, cond in checks:
@@ -125,10 +129,33 @@ def run_env_setup(v):
             ok_all = False
     try:
         ast.parse(src)
-        print("   [OK  ] 生成的卸载器语法正确（ast.parse）")
+        print("   [OK  ] 卸载器语法正确（ast.parse）")
     except SyntaxError as e:
         ok_all = False
-        print("   [FAIL] 生成的卸载器语法错: %s" % e)
+        print("   [FAIL] 卸载器语法错: %s" % e)
+
+    # 安装器一侧：旧方案（生成 .py 交给 pythonw）必须已经彻底退场，
+    # 否则等于两套卸载器并存 —— 用户点哪个都说不清
+    print("   --- 安装器与卸载器的接口 ---")
+    try:
+        with open(os.path.join(_INST, "installer.py"), "r", encoding="utf-8") as f:
+            inst_src = f.read()
+        pairs = [
+            ("安装器已不再生成 .py 卸载器（无 UNINSTALLER_TEMPLATE）",
+             "UNINSTALLER_TEMPLATE" not in inst_src),
+            ("安装器复制并注册卸载器 exe", "uninstaller.exe" in inst_src),
+            ("RuntimeDir 写进注册表（卸载器据此删环境）",
+             "RuntimeDir" in inst_src and "RuntimeDir" in src),
+            ("注册表键两边一致",
+             "AIGC_Toolkit" in inst_src and "AIGC_Toolkit" in src),
+        ]
+        for name, cond in pairs:
+            print("   [%s] %s" % ("OK  " if cond else "FAIL", name))
+            if not cond:
+                ok_all = False
+    except OSError as e:
+        ok_all = False
+        print("   [FAIL] 读 installer.py 失败: %s" % e)
     print()
 
     # ------------------------------------------------- 4. 进度解析（分母）
@@ -208,6 +235,6 @@ def run_env_setup(v):
     print()
 
     v.add("ENV", not ok_all,
-          "路径校验 %d/%d、CUDA 映射 %d/%d、卸载器模板、进度解析、自检 %.2fs"
+          "路径校验 %d/%d、CUDA 映射 %d/%d、卸载器 exe、进度解析、自检 %.2fs"
           % (len(cases) - (0 if ok_all else 1), len(cases),
              len(mapping), len(mapping), dt))

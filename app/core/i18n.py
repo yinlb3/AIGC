@@ -252,6 +252,10 @@ ZH = {
     "inst_done_log": "安装完成。桌面已创建快捷方式：%s",
     "inst_done_box": "%s 安装完成！\n首次打开会自动下载运行组件与检测模型，之后离线可用。",
     "inst_done_title": "完成",
+    # 打包信息：写在安装日志第一行。2026-09 的教训 —— 源码改了但 exe 没重打，
+    # 装到机器上的是旧代码却看不出来（界面现象全是旧的）。有这一行就不用猜。
+    "inst_build_line": "安装包：v%s ｜ 构建 %s ｜ %s",
+    "inst_uninstaller_missing": "未找到卸载器 exe（安装器未打包？），已跳过注册卸载入口",
     "inst_cancelled": "已取消",
     "inst_failed_prefix": "安装失败：%s",
     "inst_fail_log": "失败：%s",
@@ -615,6 +619,8 @@ EN = {
     "inst_done_log": "Installation complete. Desktop shortcut created: %s",
     "inst_done_box": "%s installed!\nComponents and the detection model download automatically on first launch; after that it works offline.",
     "inst_done_title": "Done",
+    "inst_build_line": "Installer build: v%s | %s | %s",
+    "inst_uninstaller_missing": "Uninstaller exe not found (installer not rebuilt?); skipped registering the uninstall entry",
     "inst_cancelled": "Cancelled",
     "inst_failed_prefix": "Install failed: %s",
     "inst_fail_log": "Failed: %s",

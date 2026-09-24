@@ -139,19 +139,28 @@ def run_package_check(v):
     print()
 
     # ------------------------------------------------------ 5. 卸载完整性
-    print("--- 5. 卸载流程是否清得干净（静态核查 installer 代码）---")
+    print("--- 5. 卸载流程是否清得干净（静态核查 installer/uninstaller.py）---")
     try:
-        with open(ins, "r", encoding="utf-8") as fh:
+        # 2026-09 起卸载器是**独立文件**（installer/uninstaller.py，打包成 exe 随安装分发），
+        # 不再是 installer.py 里的模板字符串 —— 所以核查对象换成它本身。
+        with open(os.path.join(ROOT, "installer", "uninstaller.py"),
+                  "r", encoding="utf-8") as fh:
             src = fh.read()
-        # 卸载器是模板字符串 UNINSTALLER_TEMPLATE，逐项核查其动作。
+        with open(ins, "r", encoding="utf-8") as fh:
+            inst_src = fh.read()
         # **注意**：不要搜 "models" 字面量来判断"删模型目录"——
         # 模型在 <base_dir>/models，属 TARGET 之内，被 `rd /s /q TARGET`
         # 一起删除（卸载提示语也写了"含模型文件"）。搜字面量会误报。
         checks = [
             ("删注册表卸载项", "DeleteKey" in src),
-            ("删桌面快捷方式", "Desktop" in src and "os.remove(lnk)" in src),
-            ("删安装目录（含 models/）", 'rd /s /q' in src and "TARGET" in src),
-            ("延迟删除（避开文件锁）", "ping 127.0.0.1" in src),
+            ("删桌面快捷方式", "Desktop" in src and "os.remove" in src),
+            ("删安装目录（含 models/；非空时 rd 自动失败）",
+             'rd /s /q' in src and "TARGET" in src),
+            ("延迟删除（避开自身 exe 的文件锁）", "ping 127.0.0.1" in src),
+            ("自删卸载器 exe", "del /f /q" in src),
+            ("运行环境路径取自注册表 RuntimeDir", "RuntimeDir" in src),
+            ("安装器复制并注册卸载器 exe", "uninstaller.exe" in inst_src),
+            ("旧模板字符串已退场", "UNINSTALLER_TEMPLATE" not in inst_src),
         ]
         for name, ok in checks:
             print("   [%s] %s" % ("OK  " if ok else "**缺**", name))

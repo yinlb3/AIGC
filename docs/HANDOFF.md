@@ -1,6 +1,6 @@
 # HANDOFF — 交接说明
 
-项目：`d:\Project\AIGC`（AI 检测工具箱 v1.2.8，原作者 gxgx3456）
+项目：`d:\Project\AIGC`（AI 检测工具箱，原作者 gxgx3456；接手时 v1.2.8，现行 v1.3.0）
 本轮工作：代码审查、修复与实测验证（yinlb，2026-09）
 细节见 `FIXES.md`（缺陷与改动）、`CALIBRATION.md`（数据）、`CHECK_FLOW.md`（检测流程）。
 
@@ -58,7 +58,9 @@ tools/probes/  →  tools/export_calibration.py  →  app/core/engines/engines_c
 |---|---|
 | `app/core/gpuinfo.py` | 显卡 / CUDA 探测（**纯标准库**，零依赖）：读 `nvidia-smi` 的 `CUDA Version` → 选 `cuXXX` 索引；installer 与 first_run 共用同一份逻辑 |
 | `app/core/selfcheck.py` | 启动自检 L1–L3（依赖存在性 + 真 import + CUDA 可用），实测约 1.5 秒；主程序在后台线程调用，有问题才提示 |
-| `tools/probes/env_setup.py` | 探针：路径校验 / CUDA 映射 / 卸载器模板 / 进度解析 / 启动自检 |
+| `installer/uninstaller.py` | **独立卸载器**（2026-09-24 晚）：打包成 `dist/uninstaller.exe` 随安装分发，装机时复制到 `<安装目录>\uninstaller.exe` 并注册为卸载入口；不再生成 `.py` 交给 `pythonw` |
+| `tools/build_exe.ps1` | **打包脚本**（三步，顺序不可反）：`uninstaller.exe` → `first_run_gui.exe` → `AIGC_Toolkit_Setup.exe`；顺带生成 `build_info.json`（版本 + git 短哈希 + 打包时间） |
+| `tools/probes/env_setup.py` | 探针：路径校验 / CUDA 映射 / 卸载器（独立 exe）/ 进度解析 / 启动自检 |
 | `tools/probes/display_marks.py` | 探针：四档和恒为 100 / 柱状图边界 / 引擎语言标注 |
 
 ---
@@ -72,6 +74,7 @@ tools/probes/  →  tools/export_calibration.py  →  app/core/engines/engines_c
 | 1 | **`fastdetectgpt` 中英标定** | **~5.5 小时**（中 15,216×1.01s=4.3h + 英 5,984×0.65s=1.1h）| 显存 free 14.7GB，**7GB 红线实测不成问题**；需与下一项排队用卡 |
 | 2 | `detectgpt` 中文换 `google/mt5-xl` → 标定 | 下载 ~1h + 标定 ~1.8h | 论文方案（`FIXES.md` §2.4）；扰动档按论文跑 `1,10,100` |
 | 3 | **pyright 剩 5 条 `reportUnusedImport` warning** | 分钟级 | `app/core/engines/__init__.py` 的对外接口 / 探测导入；**用户要求如实记录、不做抑制**，故 pending |
+| 4 | **用新 exe 装一次复核**（装机端到端）| ~30 分钟（含下 2~3GB 依赖）| 2026-09-24 晚只做完静态验证；待验：装完自动关闭、日志首行构建信息、`<安装目录>\uninstaller.exe` 到位、注册表 `UninstallString` 指向它、点它卸载能清干净 |
 
 **已撤销**：「采样数 k 提到 100」—— 查证原文与官方仓库后确认是**误判**：
 fast 路线的 `compute_crit()` 只做一次前向（解析式曲率，**没有 k 参数**），
@@ -142,6 +145,9 @@ k 只属于 detectgpt 的掩码扰动，且论文一次跑 `1,10,100` 三档对�
 | 9 | **git 不读 Windows 系统代理** | 它只认 `http.proxy` 配置或 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量。临时走代理：`git -c http.proxy=http://127.0.0.1:7890 push`（**不写任何配置**）|
 | 10 | **`docx` 不是 python-docx** | PyPI 上的 `docx` 是 2014 年的另一个库，`pip install docx` 装错包；pip 名必须写 `python-docx` |
 | 11 | **同步规则副本要按目录结构** | 拷错层级会造成"真源是新的、AI 读到的却是旧的"——`SKILL.md` 引用 `references/`，把文件拷到根层等于没生效（实测踩过，持续两天）|
+| 12 | **改完必须重打 exe** | `tools/build_exe.ps1`，三步且**顺序不可反**（安装器把 `uninstaller.exe` 与整个 `app/` 当数据打进自己）。2026-09-24 实测装机装的是 9/19 的旧包：源码全改了，用户看到的全是旧现象 |
+| 13 | **PS 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM** | 带 BOM 的 json 会让 `json.load` 直接抛，`build_info` 静默退化成 `dev`。写无 BOM：`[IO.File]::WriteAllText($p, $s, (New-Object Text.UTF8Encoding($false)))`；读侧用 `utf-8-sig` 兜底 |
+| 14 | **探针汇总里的 `[BUG]` 未必是 bug** | `Verdicts.add(tag, ok, …)` 把 `ok=True` 当"BUG 确认"，而 `package_flow` 传的是 `ok_all`（True=通过）→ 显示 `[BUG]` 但文字是"通过"。语义历史遗留，看正文不看标签 |
 
 ---
 

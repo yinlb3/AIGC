@@ -10,6 +10,7 @@ GUI 只是薄薄一层壳 —— 这样既可以用 `installer.py --cli D:\\目�
 （也方便自测），又避免"把逻辑写在 Tk 回调里没法验证"的老问题。
 """
 
+import json
 import os
 import queue
 import shutil
@@ -49,224 +50,10 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 AUTHOR_EMAIL = "gxgx3456@qq.com"
 PY_NAME = ("Python 便携包 (*.zip)", "*.zip")
 
-# 卸载器由安装器生成到安装目录；自删用延迟 rd，避开运行中 python.exe 的文件锁
-UNINSTALLER_TEMPLATE = '''# -*- coding: utf-8 -*-
-"""AI 检测工具箱 卸载器（由安装器自动生成，勿手改）。
-
-清理策略（**三个勾默认都不打**）
---------------------------------
-默认只删"软件的壳"：注册表卸载项、桌面快捷方式、程序本体 ``app\\\\``、
-以及 settings.json / 启动.cmd / 诊断.cmd。运行环境与模型**默认保留** ——
-前者重装能复用（省几 GB 下载），后者是用户花时间下的东西。
-
-三个勾对应三类**性质完全不同**的东西：
-    下载缓存与日志 —— 软件自己产生的，删了零损失
-    Python 运行环境 —— 软件装的，删了重装要重下，慢但不丢东西
-    已下载的模型   —— 用户花时间下的资产，删了要重下（10GB 的可能几小时）
-
-合并成一个勾是危险的：用户想"清个缓存"，会顺手把 10GB 模型删掉且不可恢复。
-
-模型目录可能被设置指到别的盘（settings.json 的 download.models_dir），
-所以只删**我们自己的那几个子目录**，绝不整删 models_dir —— 用户可能把
-别的软件也指向同一个目录。
-"""
-import json
-import os
-import shutil
-import subprocess
-import tkinter as tk
-from tkinter import messagebox
-
-TARGET = r"@TARGET@"
-RUNTIME_DIR = r"@RUNTIME_DIR@"
-EMAIL = "@EMAIL@"
-APP_NAME = "AI 检测工具箱"
-CREATE_NO_WINDOW = 0x08000000
-
-# 有模型的引擎 id —— 即 models 下属于我们的子目录名，与
-# app/core/engines/catalog.py 的 id 对应。卸载器没法 import catalog
-# （此时 app\\ 可能已被删），故在此列一份，**新增引擎时记得同步**。
-_ENGINE_DIRS = ("simpleai", "gltr", "zh_perplexity", "binoculars",
-                "detectgpt", "fastdetectgpt")
-
-
-def _human(n):
-    n = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return "%.1f %s" % (n, unit)
-        n /= 1024.0
-    return "%.1f TB" % n
-
-
-def _dir_size(path):
-    total = 0
-    for root_dir, _dirs, files in os.walk(path):
-        for f in files:
-            try:
-                total += os.path.getsize(os.path.join(root_dir, f))
-            except OSError:
-                pass
-    return total
-
-
-def _models_dir():
-    """模型目录：默认 <TARGET>\\\\models；设置里可指到别的盘。"""
-    try:
-        p = os.path.join(TARGET, "settings.json")
-        if os.path.exists(p):
-            with open(p, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            md = ((d.get("download") or {}).get("models_dir") or "").strip()
-            if md and os.path.isdir(md):
-                return md
-    except Exception:
-        pass
-    d = os.path.join(TARGET, "models")
-    return d if os.path.isdir(d) else ""
-
-
-def _rm(path):
-    """删文件或目录，失败不抛（尽力而为）。"""
-    try:
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-        elif os.path.exists(path):
-            os.remove(path)
-    except OSError:
-        pass
-
-
-def main():
-    root = tk.Tk()
-    root.title("卸载 " + APP_NAME)
-    root.geometry("580x390")
-    root.resizable(False, False)
-
-    run_dir = RUNTIME_DIR or os.path.join(TARGET, "runtime", "python")
-    cache_dirs = [os.path.join(TARGET, "_downloads"),
-                  os.path.join(TARGET, "_pipcache"),
-                  os.path.join(TARGET, "logs")]
-    models_dir = _models_dir()
-
-    cache_size = sum(_dir_size(p) for p in cache_dirs if os.path.isdir(p))
-    run_size = _dir_size(run_dir) if os.path.isdir(run_dir) else 0
-    mdl_size = (sum(_dir_size(os.path.join(models_dir, n))
-                    for n in _ENGINE_DIRS) if models_dir else 0)
-
-    tk.Label(root, text="卸载 " + APP_NAME,
-             font=("Microsoft YaHei UI", 14, "bold")).pack(
-        anchor="w", padx=18, pady=(16, 4))
-    tk.Label(root, justify="left", fg="#475569", wraplength=540,
-             text="将删除：卸载注册项、桌面快捷方式、程序本体。\\\n"
-                  "运行环境与模型默认保留（重装可复用，省几 GB 下载）。"
-             ).pack(anchor="w", padx=18, pady=(0, 10))
-
-    chk_cache = tk.BooleanVar(value=False)
-    chk_run = tk.BooleanVar(value=False)
-    chk_models = tk.BooleanVar(value=False)
-
-    def add_chk(var, prefix, size, suffix, enabled=True):
-        cb = tk.Checkbutton(root, variable=var, anchor="w", justify="left",
-                            wraplength=540,
-                            text=prefix + _human(size) + suffix)
-        cb.pack(fill="x", padx=18, pady=2)
-        if not enabled:
-            cb.config(state="disabled")
-
-    add_chk(chk_cache, "同时清理下载缓存与日志（可释放 ", cache_size, "）")
-    add_chk(chk_run, "同时删除 Python 运行环境（", run_size,
-            "，删后重装需重新下载）")
-    add_chk(chk_models, "同时删除已下载的模型（", mdl_size, "，删后需重新下载）")
-
-    if models_dir and os.path.abspath(models_dir) != os.path.join(
-            os.path.abspath(TARGET), "models"):
-        tk.Label(root, fg="#475569", justify="left", wraplength=540,
-                 text="模型目录（设置里指定的位置）：%s" % models_dir
-                 ).pack(anchor="w", padx=18, pady=(6, 0))
-
-    tk.Label(root, fg="#475569", justify="left", wraplength=540,
-             text="遇到 Bug？欢迎先邮件反馈，很多问题都能修：\\\n" + EMAIL
-             ).pack(anchor="w", padx=18, pady=(10, 0))
-
-    def do_uninstall():
-        if not messagebox.askyesno(
-            "确认卸载",
-            "确定要卸载 %s 吗？\\n\\n卸载器不会修改你系统里已安装的 Python 环境。"
-            % APP_NAME, parent=root,
-        ):
-            return
-
-        # 1) 注册表卸载项
-        try:
-            import winreg
-
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER,
-                             r"Software\\Microsoft\\Windows\\CurrentVersion"
-                             r"\\Uninstall\\AIGC_Toolkit")
-        except OSError:
-            pass
-        # 2) 桌面快捷方式
-        try:
-            lnk = os.path.join(os.path.expanduser("~"), "Desktop",
-                               APP_NAME + ".lnk")
-            if os.path.exists(lnk):
-                os.remove(lnk)
-        except OSError:
-            pass
-        # 3) 程序本体与配置 —— 这两样**总是删**（它们是"软件的壳"）
-        _rm(os.path.join(TARGET, "app"))
-        _rm(os.path.join(TARGET, "settings.json"))
-        _rm(os.path.join(TARGET, "启动.cmd"))
-        _rm(os.path.join(TARGET, "诊断.cmd"))
-
-        # 4) 三个勾选项
-        if chk_cache.get():
-            for p in cache_dirs:
-                _rm(p)
-        if chk_models.get() and models_dir:
-            for n in _ENGINE_DIRS:
-                _rm(os.path.join(models_dir, n))
-
-        msg = "已卸载，感谢使用。"
-        if chk_run.get():
-            # 环境目录里有正在运行的 pythonw.exe，必须等本进程退出后再删，
-            # 故交给 cmd 延迟执行。
-            #
-            # **只删用户选定的那个环境目录本身**，绝不删它的父目录 ——
-            # 自选路径时父目录里可能是用户自己的东西。
-            cmds = ['rd /s /q "%s"' % run_dir]
-            default_parent = os.path.join(TARGET, "runtime")
-            if os.path.normcase(os.path.dirname(run_dir)) == os.path.normcase(
-                    default_parent):
-                # 默认布局下这个父目录只装着我们这份环境，空了顺手删掉
-                cmds.append('rd "%s"' % default_parent)
-            cmds.append('rd "%s"' % TARGET)     # 空的安装目录（非空时自动失败）
-            subprocess.Popen(
-                'cmd /c ping 127.0.0.1 -n 4 > nul & ' + " & ".join(cmds),
-                creationflags=CREATE_NO_WINDOW,
-            )
-            msg += "\\n\\n运行环境将在几秒后删除。"
-        else:
-            msg += ("\\n\\n运行环境与模型仍保留在：\\n%s\\n"
-                    "（如需彻底删除，请再次运行卸载器并勾选对应项）" % TARGET)
-        msg += "\\n\\n遇到 Bug 或建议随时邮件：\\n" + EMAIL
-        messagebox.showinfo("完成 / Done", msg)
-        root.destroy()
-
-    btns = tk.Frame(root)
-    btns.pack(fill="x", padx=18, pady=(14, 16), side="bottom")
-    tk.Button(btns, text="卸载", width=10,
-              command=do_uninstall).pack(side="right")
-    tk.Button(btns, text="取消", width=10,
-              command=root.destroy).pack(side="right", padx=6)
-
-    root.mainloop()
-
-
-main()
-'''
-
+# 卸载器不再由安装器生成 .py 脚本，而是**独立 exe**（2026-09 改）：
+# 源码 installer/uninstaller.py → tools/build_exe.ps1 打包成 installer/uninstaller.exe
+# → 安装时复制到 <安装目录>\uninstaller.exe，并注册为卸载入口。
+# 为什么不生成 .py 交给 pythonw 去跑：见 register_uninstall() 的文档字符串。
 
 
 class Cancelled(RuntimeError):
@@ -798,31 +585,100 @@ def make_shortcut(target, args, workdir, log=print, icon=""):
     log(tr("inst_shortcut_done") % lnk)
 
 
-def register_uninstall(target, pythonw_runtime, runtime_dir, log=print):
-    """写入卸载器并注册到 Windows「设置 > 应用 / 控制面板卸载程序」。
+def build_info_path():
+    """打包时写入的构建信息文件（``build_info.json``）在哪；没有则返回空串。
 
-    ``runtime_dir`` 必须是**用户实际选定的那个环境目录**（不是从 pythonw.exe
-    反推出来的父目录）—— 反推是错的：用户若选 ``D:\\myenv``（只一层），反推会
-    得到 ``D:\\``，卸载时 ``rd /s /q`` 就把磁盘根删了。
+    打包脚本 ``tools/build_exe.ps1`` 生成它并打进 exe。源码模式下没有该文件，
+    调用方必须能容忍"不知道版本"（回退 ``dev``），**绝不编一个像真的版本号**。
     """
-    unw = os.path.join(target, "uninstall.pyw")
+    # 注意别把 ".." 写重：__file__ 在 installer/ 下，上溯两级已是仓库根，
+    # 再拼一个 ".." 就跑出仓库了（实测踩过：读不到 build_info.json → 退化成 dev）
+    cands = []
+    _mp = getattr(sys, "_MEIPASS", "")
+    if _mp:
+        cands.append(os.path.join(_mp, "build_info.json"))
+    cands.append(os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "build", "build_info.json"))
+    cands = [os.path.abspath(p) for p in cands]
+    for p in cands:
+        if p and os.path.exists(p):
+            return p
+    return ""
+
+
+def build_stamp():
+    """读取构建信息；读不到就回 ``dev``。"""
+    p = build_info_path()
+    if p:
+        try:
+            # utf-8-sig：容忍别人用 PowerShell 5.1 的 `Set-Content -Encoding UTF8`
+            # 写出的 BOM（实测踩过：带 BOM 时 json.load 直接抛，静默退化成 dev）
+            with open(p, "r", encoding="utf-8-sig") as f:
+                return json.load(f)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"version": APP_VER, "git": "dev", "built": ""}
+
+
+def build_line():
+    """一行构建信息（版本 / git 短哈希 / 打包时间），写在安装日志最前面。
+
+    为什么要有：出问题时第一句话总是"你装的是哪一版"，而 2026-09 的教训是
+    **装了旧 exe 却看不出来**（源码改了没重新打包，用户看到的现象全是旧的）。
+    """
+    d = build_stamp()
+    return tr("inst_build_line") % (
+        d.get("version", APP_VER), d.get("git", "dev"), d.get("built", "?"))
+
+
+def uninstaller_source():
+    """打包好的卸载器 exe 在哪（安装时复制到安装目录）。
+
+    打包后在 ``_MEIPASS``；源码模式看 ``dist\\uninstaller.exe`` —— 需要先跑
+    ``tools\\build_exe.ps1``，否则注册卸载入口这步会被跳过并写进日志
+    （不静默失败）。
+    """
+    cands = [
+        os.path.join(getattr(sys, "_MEIPASS", ""), "uninstaller.exe"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "dist", "uninstaller.exe"),
+    ]
+    for p in cands:
+        if p and os.path.exists(p):
+            return p
+    return ""
+
+
+def register_uninstall(target, runtime_dir, log=print):
+    """放置卸载器 exe 并注册到 Windows「设置 > 应用 / 控制面板卸载程序」。
+
+    为什么是 exe，而不是"生成 .py 让 pythonw 去跑"（2026-09 改）：
+      1. 一般软件的卸载入口都是 exe，用户看到 pythonw.exe 会以为装错了东西；
+      2. 那个 .py 依赖运行环境 —— 环境被删或损坏后，卸载器自己也跑不起来，
+         用户只能手动删目录 + 手动清注册表。exe 自带解释器，与环境解耦。
+
+    ``runtime_dir`` 必须写进注册表（``RuntimeDir``），卸载器读它决定删哪个目录。
+    **不能从 pythonw.exe 反推父目录** —— 用户若把环境放在 ``D:\\myenv``（只一层），
+    反推得到 ``D:\\``，``rd /s /q`` 会把磁盘根删掉（旧版的真实缺陷）。
+    """
+    src = uninstaller_source()
+    dst = os.path.join(target, "uninstaller.exe")
+    if not src:
+        # 源码模式还没打包过 —— 说清楚，别让"卸载入口没注册"变成谜
+        log(tr("inst_uninstaller_missing"))
+        return
     try:
-        with open(unw, "w", encoding="utf-8") as f:
-            f.write(
-                UNINSTALLER_TEMPLATE
-                .replace("@TARGET@", target)
-                .replace("@RUNTIME_DIR@", runtime_dir)
-                .replace("@EMAIL@", AUTHOR_EMAIL)
-            )
+        shutil.copyfile(src, dst)
     except OSError as e:
-        log("写入卸载器失败: %s" % e)
+        log(tr("inst_uninstall_reg_fail") % _err_text(e))
         return
     try:
         import winreg
 
-        # 卸载项图标也用程序自己的图标（原来是 pythonw.exe 的 Python 图标，很难看）
+        # 卸载项图标用程序自己的图标（否则是 exe 自带图标 / Python 图标）
         _ico = os.path.join(target, "app", "assets", "icon.ico")
-        display_icon = _ico if os.path.exists(_ico) else pythonw_runtime
+        display_icon = _ico if os.path.exists(_ico) else dst
 
         key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
         vals = [
@@ -831,7 +687,8 @@ def register_uninstall(target, pythonw_runtime, runtime_dir, log=print):
             ("Publisher", "gxgx3456"),
             ("DisplayIcon", display_icon),
             ("InstallLocation", target),
-            ("UninstallString", '"%s" "%s"' % (pythonw_runtime, unw)),
+            ("RuntimeDir", runtime_dir or ""),
+            ("UninstallString", '"%s"' % dst),
             ("HelpLink", "mailto:%s" % AUTHOR_EMAIL),
             ("Contact", AUTHOR_EMAIL),
             ("Comments", "遇到 Bug 请邮件反馈 / Report bugs: %s" % AUTHOR_EMAIL),
@@ -894,10 +751,17 @@ def perform_install(target, log=None, status=None, cancelled=None, ask_manual=No
             % (target.replace("\\", "\\\\"), lang or get_lang())
         )
     _write_launchers(target, appdir, pydir, log)
+    # 构建信息也落一份到安装目录：用户报问题时让他发这个文件，就知道装的是哪版
+    info = build_info_path()
+    if info:
+        try:
+            shutil.copyfile(info, os.path.join(target, "build_info.json"))
+        except OSError:
+            pass
 
-    # 4. 卸载入口
+    # 4. 卸载入口（复制卸载器 exe + 写注册表，注册表里带上 RuntimeDir）
     status(tr("inst_register_uninstall"), 90)
-    register_uninstall(target, os.path.join(pydir, "pythonw.exe"), pydir, log)
+    register_uninstall(target, pydir, log)
 
     # 5. 快捷方式 + 启动
     status(tr("inst_create_shortcut"), 94)
@@ -1116,6 +980,8 @@ class Installer(tk.Tk if tk else object):
             fill="x", padx=18, pady=(0, 10)
         )
         self._apply_lang()
+        # 日志第一行写清"这个安装包是哪一版"——出问题时第一句话就是问这个
+        self.log_msg(build_line())
 
     def _apply_lang(self):
         self.title(tr("inst_title"))
@@ -1240,19 +1106,26 @@ class Installer(tk.Tk if tk else object):
                 lang=get_lang(),
                 runtime_dir=getattr(self, "runtime_dir", None),
             )
-            self._ui(
-                lambda: messagebox.showinfo(
-                    tr("inst_done_title"),
-                    tr("inst_done_box") % APP_NAME,
-                )
-            )
         except Exception as e:
             self.set_status(tr("inst_failed_prefix") % e)
             self.log_msg(tr("inst_fail_log") % e)
             self._ui(lambda: messagebox.showerror(tr("inst_fail_title"), str(e)))
-        finally:
-            self.btn_start.config(state="normal")
-            self.btn_cancel.config(state="disabled")
+            # 失败才复位按钮，让用户能改目录 / 重试
+            self._ui(self._idle_buttons)
+            return
+        # 成功：提示一次后**关掉安装器**。
+        # 留着这个窗口有两个坏处：① 用户以为还没装完；② "开始安装"又能点了，
+        # 顺手再点一次就是把几 GB 依赖重装一遍（实测用户正好停在这一步）。
+        self._ui(self._finish_ok)
+
+    def _idle_buttons(self):
+        self.btn_start.config(state="normal")
+        self.btn_cancel.config(state="disabled")
+
+    def _finish_ok(self):
+        messagebox.showinfo(tr("inst_done_title"),
+                            tr("inst_done_box") % APP_NAME, parent=self)
+        self.destroy()
 
 
 def _cli(argv):
